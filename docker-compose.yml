@@ -1,0 +1,138 @@
+name: apolo-school-mvp
+
+services:
+  chatwoot-postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: chatwoot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot-local-password}
+    volumes:
+      - chatwoot-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d chatwoot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  chatwoot:
+    image: chatwoot/chatwoot:latest
+    command: bundle exec rails server -p 3000 -b 0.0.0.0
+    environment: &chatwoot-env
+      RAILS_ENV: production
+      NODE_ENV: production
+      INSTALLATION_ENV: docker
+      SECRET_KEY_BASE: ${CHATWOOT_SECRET_KEY_BASE:-change-this-to-a-long-random-local-secret}
+      FRONTEND_URL: http://localhost:3000
+      DEFAULT_LOCALE: pt_BR
+      FORCE_SSL: "false"
+      ENABLE_ACCOUNT_SIGNUP: "false"
+      REDIS_URL: redis://redis:6379
+      POSTGRES_HOST: chatwoot-postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DATABASE: chatwoot
+      POSTGRES_USERNAME: postgres
+      POSTGRES_PASSWORD: ${CHATWOOT_POSTGRES_PASSWORD:-chatwoot-local-password}
+      ACTIVE_STORAGE_SERVICE: local
+      RAILS_LOG_TO_STDOUT: "true"
+      SAFE_FETCH_ALLOW_PRIVATE_NETWORK: "true"
+      CHATWOOT_ADMIN_EMAIL: ${CHATWOOT_ADMIN_EMAIL:-admin@escola.local}
+      CHATWOOT_ADMIN_PASSWORD: ${CHATWOOT_ADMIN_PASSWORD:-ApoloLocal2026!}
+      CHATWOOT_HUMAN_EMAIL: ${CHATWOOT_HUMAN_EMAIL:-atendente@escola.local}
+      CHATWOOT_HUMAN_PASSWORD: ${CHATWOOT_HUMAN_PASSWORD:-ApoloLocal2026!}
+    depends_on:
+      chatwoot-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    volumes:
+      - chatwoot-storage:/app/storage
+      - ./infra/chatwoot:/bootstrap
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 40
+
+  chatwoot-worker:
+    image: chatwoot/chatwoot:latest
+    command: bundle exec sidekiq -C config/sidekiq.yml
+    environment: *chatwoot-env
+    depends_on:
+      chatwoot-postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - chatwoot-storage:/app/storage
+      - ./infra/chatwoot:/bootstrap
+
+  school-data:
+    build: ./apps/school-data
+    volumes:
+      - school-data:/data
+    environment:
+      SCHOOL_DB_PATH: /data/school.sqlite3
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  agent-api:
+    build: ./apps/agent-api
+    environment:
+      SCHOOL_DATA_URL: http://school-data:8000
+      OLLAMA_URL: http://host.docker.internal:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      CHATWOOT_URL: http://chatwoot:3000
+      CHATWOOT_PUBLIC_URL: http://localhost:3000
+      AGENT_STATE_DB: /data/agent.sqlite3
+      WEBHOOK_BASE_URL: http://agent-api:8000
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - agent-state:/data
+      - ./infra/chatwoot:/bootstrap:ro
+    depends_on:
+      school-data:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  messenger:
+    build: ./apps/messenger
+    depends_on:
+      agent-api:
+        condition: service_healthy
+    ports:
+      - "5173:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  chatwoot-postgres:
+  chatwoot-storage:
+  redis:
+  school-data:
+  agent-state:
