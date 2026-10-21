@@ -53,6 +53,11 @@ label = Label.find_by(account: account, title: 'escalado-humano') ||
 label.description = 'Pergunta encaminhada pelo agente escolar'
 label.save!
 
+%w[financeiro saude disciplina pedagogico documentos eventos_calendario outros].each do |category|
+  Label.find_by(account: account, title: "cat-#{category}") ||
+    Label.create!(account: account, title: "cat-#{category}", description: "Categoria: #{category}")
+end
+
 # ── channel + inbox ───────────────────────────────────────────────────────────
 
 WEBHOOK_URL = 'http://agent-api:8000/webhooks/chatwoot'
@@ -83,6 +88,7 @@ output = {
   inbox_id:             inbox.id,
   api_access_token:     token.token,
   human_user_id:        human.id,
+  team_id:              team.id,
   api_inbox_identifier: channel.identifier,
   webhook_url:          channel.webhook_url
 }

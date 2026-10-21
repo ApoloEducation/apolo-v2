@@ -1,8 +1,11 @@
 import json
+import logging
 import os
 from pathlib import Path
 
 import httpx
+
+log = logging.getLogger("apolo.chatwoot")
 
 
 class ChatwootUnavailable(RuntimeError):
@@ -38,11 +41,26 @@ class Chatwoot:
         created = await self.request("POST", "/conversations", {"source_id": source_id, "inbox_id": cfg["inbox_id"], "contact_id": contact_id})
         return contact_id, created["id"]
 
-    async def message(self, conversation_id: int, content: str, message_type: str = "incoming") -> dict:
-        return await self.request("POST", f"/conversations/{conversation_id}/messages", {"content": content, "message_type": message_type, "private": False})
+    async def message(self, conversation_id: int, content: str, message_type: str = "incoming", bot: bool = False) -> dict:
+        payload = {"content": content, "message_type": message_type, "private": False}
+        if bot:
+            payload["content_attributes"] = {"apolo_bot": True}
+        return await self.request("POST", f"/conversations/{conversation_id}/messages", payload)
 
-    async def escalate(self, conversation_id: int) -> None:
+    async def escalate(self, conversation_id: int, category: str = "outros", reason: str = "", question: str = "") -> None:
+        """Best effort: a Chatwoot hiccup here must never stop the parent from being told about the handoff."""
         cfg = self.config()
-        await self.request("POST", f"/conversations/{conversation_id}/labels", {"labels": ["escalado-humano"]})
-        await self.request("POST", f"/conversations/{conversation_id}/assignments", {"team_id": cfg["team_id"], "assignee_id": cfg["human_user_id"]})
-        await self.request("POST", f"/conversations/{conversation_id}/toggle_status", {"status": "open"})
+        steps = [
+            ("labels", f"/conversations/{conversation_id}/labels", {"labels": ["escalado-humano", f"cat-{category}"]}),
+            ("note", f"/conversations/{conversation_id}/messages", {"content": f"Categoria: {category}\nMotivo: {reason or 'n/d'}\nPergunta: {question}", "message_type": "outgoing", "private": True}),
+        ]
+        if cfg.get("team_id"):
+            steps.append(("assignment", f"/conversations/{conversation_id}/assignments", {"team_id": cfg["team_id"], "assignee_id": cfg["human_user_id"]}))
+        else:
+            steps.append(("assignment", f"/conversations/{conversation_id}/assignments", {"assignee_id": cfg["human_user_id"]}))
+        steps.append(("status", f"/conversations/{conversation_id}/toggle_status", {"status": "open"}))
+        for name, path, payload in steps:
+            try:
+                await self.request("POST", path, payload)
+            except Exception as exc:  # noqa: BLE001
+                log.error("escalate: passo '%s' falhou: %s", name, exc)

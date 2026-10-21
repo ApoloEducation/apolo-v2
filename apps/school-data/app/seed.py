@@ -18,7 +18,9 @@ STUDENTS = [
     ("s09", "Davi Ferreira", "8C", "g09"), ("s10", "Laura Barros", "8C", "g10"),
     ("s11", "Miguel Azevedo", "8C", "g11"), ("s12", "Alice Freitas", "8C", "g12"),
 ]
-GUARDIANS = [(f"g{i:02}", f"Responsável de {name.split()[0]}") for i, (_, name, _, _) in enumerate(STUDENTS, 1)]
+GUARDIAN_NAMES = ["Marina Almeida", "Carlos Ribeiro", "Juliana Santos", "Roberto Lima", "Patrícia Rocha", "Fernando Carvalho",
+                  "Camila Nunes", "André Melo", "Renata Ferreira", "Eduardo Barros", "Luciana Azevedo", "Paulo Freitas"]
+GUARDIANS = [(f"g{i:02}", name) for i, name in enumerate(GUARDIAN_NAMES, 1)]
 
 
 def seed_database() -> None:
@@ -34,6 +36,9 @@ def seed_database() -> None:
         CREATE TABLE IF NOT EXISTS notices (id INTEGER PRIMARY KEY, class_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, date TEXT NOT NULL);
         """)
         if conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]:
+            # Databases seeded before guardians had real names: rename the placeholders in place.
+            for guardian_id, name in GUARDIANS:
+                conn.execute("UPDATE guardians SET name=? WHERE id=? AND name LIKE 'Responsável de %'", (name, guardian_id))
             return
         conn.executemany("INSERT INTO teachers VALUES (?, ?, ?)", TEACHERS)
         conn.executemany("INSERT INTO classes VALUES (?, ?, ?, ?)", CLASSES)

@@ -12,3 +12,4 @@ def test_seed_and_guardian_scope():
             context = client.get("/guardians/g01/context").json()
             assert context["students"][0]["name"] == "Lucas Almeida"
             assert client.get("/guardians/g99/context").status_code == 404
+            assert context["guardian"]["name"] == "Marina Almeida"  # a real name, never "Responsável de <aluno>"

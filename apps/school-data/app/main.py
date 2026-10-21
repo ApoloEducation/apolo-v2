@@ -34,14 +34,21 @@ def guardian_context(guardian_id: str):
         for student in students:
             student["grades"] = rows(conn, "SELECT subject, term, score FROM grades WHERE student_id=?", (student["id"],))
             attendance = conn.execute("SELECT present_days, school_days FROM attendance WHERE student_id=?", (student["id"],)).fetchone()
-            student["attendance"] = dict(attendance)
+            student["attendance"] = {**dict(attendance), "absences": attendance["school_days"] - attendance["present_days"]} if attendance else None
             student["schedule"] = rows(conn, """SELECT sc.weekday, sc.time, sc.subject, t.name teacher FROM schedule sc
                 JOIN teachers t ON t.id=sc.teacher_id WHERE class_id=? ORDER BY time""", (student["class_id"],))
             student["notices"] = rows(conn, "SELECT title, body, date FROM notices WHERE class_id=? ORDER BY date", (student["class_id"],))
         return {"guardian": dict(guardian), "students": students}
 
 
+@app.get("/students")
+def students():
+    with connection() as conn:
+        return rows(conn, "SELECT id, name, guardian_id FROM students ORDER BY id")
+
+
 @app.get("/stats")
 def stats():
     with connection() as conn:
-        return {"students": conn.execute("SELECT COUNT(*) FROM students").fetchone()[0], "classes": 3, "teachers": 3}
+        return {"students": conn.execute("SELECT COUNT(*) FROM students").fetchone()[0], "classes": conn.execute("SELECT COUNT(*) FROM classes").fetchone()[0],
+                "teachers": conn.execute("SELECT COUNT(*) FROM teachers").fetchone()[0]}

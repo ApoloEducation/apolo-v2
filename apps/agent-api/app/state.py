@@ -9,7 +9,8 @@ PATH = Path(os.getenv("AGENT_STATE_DB", "/tmp/agent.sqlite3"))
 @contextmanager
 def db():
     PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(PATH)
+    conn = sqlite3.connect(PATH, timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
     conn.row_factory = sqlite3.Row
     try:
         yield conn
@@ -30,6 +31,9 @@ def initialize():
           content TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS locally_delivered_chatwoot_messages (
+          chatwoot_message_id INTEGER PRIMARY KEY
+        );
+        CREATE TABLE IF NOT EXISTS processed_webhook_messages (
           chatwoot_message_id INTEGER PRIMARY KEY
         );
         """)
@@ -72,3 +76,17 @@ def was_locally_delivered(chatwoot_message_id: int | None) -> bool:
         return False
     with db() as conn:
         return conn.execute("SELECT 1 FROM locally_delivered_chatwoot_messages WHERE chatwoot_message_id=?", (chatwoot_message_id,)).fetchone() is not None
+
+
+def claim_webhook_message(chatwoot_message_id: int | None) -> bool:
+    """True only the first time a Chatwoot message id is seen (webhook idempotency)."""
+    if chatwoot_message_id is None:
+        return True
+    with db() as conn:
+        return conn.execute("INSERT OR IGNORE INTO processed_webhook_messages VALUES (?)", (chatwoot_message_id,)).rowcount == 1
+
+
+def guardian_for_conversation(chatwoot_conversation_id: int | None) -> str | None:
+    with db() as conn:
+        row = conn.execute("SELECT guardian_id FROM conversations WHERE chatwoot_conversation_id=?", (chatwoot_conversation_id,)).fetchone()
+        return row["guardian_id"] if row else None

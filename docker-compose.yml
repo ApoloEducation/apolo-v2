@@ -91,6 +91,18 @@ services:
       timeout: 3s
       retries: 20
 
+  school-db-admin:
+    image: coleifer/sqlite-web
+    environment:
+      SQLITE_DATABASE: school.sqlite3
+    volumes:
+      - school-data:/data
+    depends_on:
+      school-data:
+        condition: service_healthy
+    ports:
+      - "8081:8080"
+
   agent-api:
     build: ./apps/agent-api
     environment:

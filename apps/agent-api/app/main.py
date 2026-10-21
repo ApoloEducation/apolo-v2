@@ -1,14 +1,22 @@
 import asyncio
+import logging
+import os
 from collections import defaultdict
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+import httpx
+
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .agent import Escalate, answer
 from .chatwoot import Chatwoot, ChatwootUnavailable
-from .state import (conversation, history, initialize, mark_local_delivery, save_conversation,
-                    save_message, was_locally_delivered)
+from .state import (claim_webhook_message, conversation, guardian_for_conversation, history, initialize,
+                    mark_local_delivery, save_conversation, save_message, was_locally_delivered)
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("apolo.api")
 
 app = FastAPI(title="Apolo Agent API")
 app.add_middleware(
@@ -19,8 +27,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 clients: dict[str, set[WebSocket]] = defaultdict(set)
+locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 chatwoot = Chatwoot()
+RESOLVED_NOTICE = "Seu atendimento foi finalizado. Se precisar de algo mais, é só escrever por aqui!"
 HANDOFF = "Vou encaminhar sua mensagem para nossa equipe de atendimento. Um atendente responderá por aqui assim que possível."
+
+
+@app.exception_handler(Exception)
+async def unhandled(_request: Request, exc: Exception):
+    log.exception("erro não tratado")
+    if isinstance(exc, httpx.HTTPError):
+        return JSONResponse({"detail": "Serviço temporariamente indisponível. Tente novamente em instantes."}, status_code=503)
+    return JSONResponse({"detail": "Erro interno. Tente novamente em instantes."}, status_code=500)
 
 
 class MessageIn(BaseModel):
@@ -41,9 +59,10 @@ def health():
 
 @app.get("/v1/guardians")
 async def guardians():
-    import httpx, os
-    async with httpx.AsyncClient() as client:
-        return (await client.get(f"{os.getenv('SCHOOL_DATA_URL')}/guardians")).json()
+    async with httpx.AsyncClient(timeout=10) as client:
+        response = await client.get(f"{os.getenv('SCHOOL_DATA_URL', 'http://school-data:8000')}/guardians")
+        response.raise_for_status()
+        return response.json()
 
 
 @app.get("/v1/history/{guardian_id}")
@@ -64,27 +83,42 @@ async def broadcast(guardian_id: str, item: dict):
 
 @app.post("/v1/messages")
 async def create_message(message: MessageIn):
-    current = conversation(message.guardian_id)
-    save_message(message.guardian_id, "guardian", message.content)
-    await broadcast(message.guardian_id, {"sender": "guardian", "content": message.content})
+    async with locks[message.guardian_id]:
+        return await handle_message(message)
+
+
+async def handle_message(message: MessageIn):
+    gid = message.guardian_id
+    current = conversation(gid)
+    save_message(gid, "guardian", message.content)
+    await broadcast(gid, {"sender": "guardian", "content": message.content})
     try:
-        contact_id, conversation_id = await chatwoot.ensure_contact_and_conversation(message.guardian_id, message.guardian_name, current)
+        contact_id, conversation_id = await chatwoot.ensure_contact_and_conversation(gid, message.guardian_name, current)
         mode = current["mode"] if current else "auto"
-        save_conversation(message.guardian_id, conversation_id, contact_id, mode)
+        save_conversation(gid, conversation_id, contact_id, mode)
         await chatwoot.message(conversation_id, message.content, "incoming")
         if mode == "human":
             return {"status": "queued"}
         try:
-            reply = await answer(message.guardian_id, message.content)
-        except Escalate:
+            reply = await answer(gid, message.content, history(gid)[:-1])
+            escalation = None
+        except Escalate as exc:
+            escalation = exc
+        except Exception as exc:  # noqa: BLE001 - never leave the parent without a response
+            log.exception("falha ao gerar resposta; escalando")
+            escalation = Escalate(f"erro: {type(exc).__name__}", question=message.content)
+        if escalation:
+            log.info("handoff gid=%s categoria=%s motivo=%s", gid, escalation.category, escalation.reason)
+            # Human mode is saved first so a later failure can never leave the bot answering during a handoff.
+            save_conversation(gid, conversation_id, contact_id, "human")
             reply = HANDOFF
-            await chatwoot.escalate(conversation_id)
-            save_conversation(message.guardian_id, conversation_id, contact_id, "human")
-        outgoing = await chatwoot.message(conversation_id, reply, "outgoing")
+        outgoing = await chatwoot.message(conversation_id, reply, "outgoing", bot=True)
         mark_local_delivery(outgoing.get("id"))
-        save_message(message.guardian_id, "agent", reply)
-        await broadcast(message.guardian_id, {"sender": "agent", "content": reply})
-        return {"status": "answered", "reply": reply}
+        save_message(gid, "agent", reply)
+        await broadcast(gid, {"sender": "agent", "content": reply})
+        if escalation:
+            await chatwoot.escalate(conversation_id, escalation.category, escalation.reason, message.content)
+        return {"status": "handoff" if escalation else "answered", "reply": reply}
     except ChatwootUnavailable as exc:
         raise HTTPException(503, str(exc))
 
@@ -92,23 +126,34 @@ async def create_message(message: MessageIn):
 @app.post("/webhooks/chatwoot")
 async def chatwoot_webhook(payload: dict):
     event = payload.get("event")
-    conversation_payload = payload.get("conversation", {})
+    conversation_payload = payload.get("conversation") or {}
+    # conversation_* events carry the conversation itself at the top level; message_* events nest it.
     conversation_id = conversation_payload.get("id") or payload.get("conversation_id")
+    if not conversation_id and str(payload.get("event", "")).startswith("conversation_"):
+        conversation_id = payload.get("id")
     status = payload.get("status") or conversation_payload.get("status")
+    log.info("webhook event=%s conversation=%s message=%s", event, conversation_id, payload.get("id"))
     if event == "conversation_status_changed" and status == "resolved":
-        from .state import db
-        with db() as conn:
-            row = conn.execute("SELECT guardian_id FROM conversations WHERE chatwoot_conversation_id=?", (conversation_id,)).fetchone()
-            if row:
-                save_conversation(row["guardian_id"], conversation_id, None, "auto")
+        guardian_id = guardian_for_conversation(conversation_id)
+        if guardian_id:
+            async with locks[guardian_id]:
+                was_human = (conversation(guardian_id) or {}).get("mode") == "human"
+                save_conversation(guardian_id, conversation_id, None, "auto")
+                if was_human:
+                    save_message(guardian_id, "agent", RESOLVED_NOTICE)
+                    await broadcast(guardian_id, {"sender": "agent", "content": RESOLVED_NOTICE})
     if event == "message_created" and payload.get("message_type") == "outgoing" and not payload.get("private"):
-        from .state import db
-        with db() as conn:
-            row = conn.execute("SELECT guardian_id FROM conversations WHERE chatwoot_conversation_id=?", (conversation_id,)).fetchone()
-        if row and not was_locally_delivered(payload.get("id")):
-            content = payload.get("content") or ""
-            save_message(row["guardian_id"], "human", content)
-            await broadcast(row["guardian_id"], {"sender": "human", "content": content})
+        attributes = payload.get("content_attributes") or {}
+        guardian_id = guardian_for_conversation(conversation_id)
+        # Messages posted by the bot itself come back through this webhook, sometimes before we could register them.
+        if not guardian_id or attributes.get("apolo_bot") or was_locally_delivered(payload.get("id")):
+            return {"ok": True}
+        if not claim_webhook_message(payload.get("id")):
+            return {"ok": True}
+        name = ((payload.get("sender") or {}).get("name") or "Atendente").strip()
+        content = f"*{name}:* {payload.get('content') or ''}"
+        save_message(guardian_id, "human", content)
+        await broadcast(guardian_id, {"sender": "human", "content": content})
     return {"ok": True}
 
 

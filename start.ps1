@@ -82,7 +82,7 @@ for ($attempt = 1; $attempt -le 15 -and -not $prepared; $attempt++) {
 }
 if (-not $prepared) { throw 'Não foi possível preparar o banco do Chatwoot. Execute: docker compose logs chatwoot-postgres' }
 
-docker compose up --build -d chatwoot chatwoot-worker school-data agent-api messenger
+docker compose up --build -d chatwoot chatwoot-worker school-data school-db-admin agent-api messenger
 
 Write-Host 'Aguardando serviços ficarem prontos...' -ForegroundColor DarkGray
 $deadline = (Get-Date).AddMinutes(5)
@@ -100,6 +100,7 @@ docker compose run --rm -e BOOTSTRAP=true chatwoot bundle exec rails runner /boo
 $readyMessage = @(
   'Mini-WhatsApp: http://localhost:5173'
   'Chatwoot:       http://localhost:3000'
+  'Banco da escola: http://localhost:8081'
   'Admin:          admin@escola.local / ApoloLocal2026!'
   'Atendente:      atendente@escola.local / ApoloLocal2026!'
   ''
