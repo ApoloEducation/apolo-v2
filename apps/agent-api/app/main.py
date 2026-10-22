@@ -1,18 +1,20 @@
 import asyncio
+import json
 import logging
 import os
 from collections import defaultdict
 
 import httpx
 
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from . import whatsapp
 from .agent import Escalate, answer
 from .chatwoot import Chatwoot, ChatwootUnavailable
-from .state import (claim_webhook_message, conversation, guardian_for_conversation, history, initialize,
+from .state import (claim_webhook_message, claim_whatsapp_message, conversation, guardian_for_conversation, history, initialize,
                     mark_local_delivery, save_conversation, save_message, was_locally_delivered)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -71,6 +73,7 @@ def get_history(guardian_id: str):
 
 
 async def broadcast(guardian_id: str, item: dict):
+    await whatsapp.deliver(guardian_id, item)
     stale = []
     for socket in clients[guardian_id]:
         try:
@@ -155,6 +158,58 @@ async def chatwoot_webhook(payload: dict):
         save_message(guardian_id, "human", content)
         await broadcast(guardian_id, {"sender": "human", "content": content})
     return {"ok": True}
+
+
+@app.get("/webhooks/whatsapp")
+def whatsapp_verify(request: Request):
+    """Meta's one-time handshake when the callback URL is saved in the app dashboard."""
+    params = request.query_params
+    token = os.getenv("WHATSAPP_VERIFY_TOKEN")
+    if token and params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == token:
+        return PlainTextResponse(params.get("hub.challenge", ""))
+    raise HTTPException(403, "verify token inválido")
+
+
+@app.post("/webhooks/whatsapp")
+async def whatsapp_webhook(request: Request, background: BackgroundTasks):
+    body = await request.body()
+    if not whatsapp.valid_signature(body, request.headers.get("X-Hub-Signature-256")):
+        raise HTTPException(403, "assinatura inválida")
+    try:
+        payload = json.loads(body or b"{}")
+    except ValueError:
+        raise HTTPException(400, "JSON inválido")
+    # Answer Meta immediately (it retries slow webhooks); the LLM runs in the background.
+    for incoming in whatsapp.parse_incoming(payload):
+        if claim_whatsapp_message(incoming["id"]):
+            background.add_task(process_whatsapp_message, incoming)
+    return {"ok": True}
+
+
+async def process_whatsapp_message(incoming: dict):
+    phone = incoming["phone"]
+    try:
+        guardian_id = whatsapp.guardian_for_phone(phone)
+        if not guardian_id:
+            log.warning("whatsapp: número %s fora do cadastro (WHATSAPP_GUARDIAN_PHONES)", phone)
+            await whatsapp.send_text(phone, whatsapp.UNKNOWN_NUMBER)
+            return
+        if incoming["type"] != "text" or not incoming["text"].strip():
+            await whatsapp.send_text(phone, whatsapp.UNSUPPORTED)
+            return
+        name = await guardian_name(guardian_id) or incoming.get("name") or "Responsável"
+        message = MessageIn(guardian_id=guardian_id, guardian_name=name, content=incoming["text"].strip()[:2000])
+        async with locks[guardian_id]:
+            await handle_message(message)
+    except Exception:  # noqa: BLE001 - a background task has nobody to report to but the log
+        log.exception("falha ao processar mensagem WhatsApp de %s", phone)
+
+
+async def guardian_name(guardian_id: str) -> str | None:
+    try:
+        return next((g["name"] for g in await guardians() if g["id"] == guardian_id), None)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 @app.websocket("/ws/{guardian_id}")

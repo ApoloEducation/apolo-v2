@@ -34,6 +34,10 @@ Para interromper, execute `./stop.ps1`. Os volumes Docker são preservados. Para
 3. Pergunte sobre saúde, disciplina, outro aluno ou algo sem dados. O agente avisará sobre o encaminhamento e adicionará a etiqueta `escalado-humano` no Chatwoot.
 4. Entre no Chatwoot com a conta de atendente, responda a conversa aberta e confirme a mensagem no Mini-WhatsApp. Ao resolver a conversa no Chatwoot, a próxima pergunta volta ao modo automático.
 
+## WhatsApp real
+
+Para trocar o Mini-WhatsApp por um número de WhatsApp de verdade (Cloud API da Meta), siga [docs/WHATSAPP.md](docs/WHATSAPP.md): basta preencher as chaves `WHATSAPP_*` no `.env`.
+
 ## Arquitetura
 
 ```text

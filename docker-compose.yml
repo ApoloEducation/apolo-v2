@@ -113,6 +113,12 @@ services:
       CHATWOOT_PUBLIC_URL: http://localhost:3000
       AGENT_STATE_DB: /data/agent.sqlite3
       WEBHOOK_BASE_URL: http://agent-api:8000
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET:-}
+      WHATSAPP_API_VERSION: ${WHATSAPP_API_VERSION:-v21.0}
+      WHATSAPP_GUARDIAN_PHONES: ${WHATSAPP_GUARDIAN_PHONES:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

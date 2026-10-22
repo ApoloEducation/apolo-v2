@@ -36,6 +36,9 @@ def initialize():
         CREATE TABLE IF NOT EXISTS processed_webhook_messages (
           chatwoot_message_id INTEGER PRIMARY KEY
         );
+        CREATE TABLE IF NOT EXISTS processed_whatsapp_messages (
+          wamid TEXT PRIMARY KEY
+        );
         """)
 
 
@@ -84,6 +87,14 @@ def claim_webhook_message(chatwoot_message_id: int | None) -> bool:
         return True
     with db() as conn:
         return conn.execute("INSERT OR IGNORE INTO processed_webhook_messages VALUES (?)", (chatwoot_message_id,)).rowcount == 1
+
+
+def claim_whatsapp_message(wamid: str | None) -> bool:
+    """True only the first time a WhatsApp message id is seen (Meta retries webhooks that answer slowly)."""
+    if not wamid:
+        return True
+    with db() as conn:
+        return conn.execute("INSERT OR IGNORE INTO processed_whatsapp_messages VALUES (?)", (wamid,)).rowcount == 1
 
 
 def guardian_for_conversation(chatwoot_conversation_id: int | None) -> str | None:
