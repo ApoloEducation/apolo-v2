@@ -97,6 +97,15 @@ def claim_whatsapp_message(wamid: str | None) -> bool:
         return conn.execute("INSERT OR IGNORE INTO processed_whatsapp_messages VALUES (?)", (wamid,)).rowcount == 1
 
 
+def reset_all() -> list[dict]:
+    """Forget every conversation, message and idempotency mark. Returns the Chatwoot ids that were known, so they can be deleted there too."""
+    with db() as conn:
+        known = [dict(row) for row in conn.execute("SELECT chatwoot_conversation_id, chatwoot_contact_id FROM conversations")]
+        for table in ("messages", "conversations", "locally_delivered_chatwoot_messages", "processed_webhook_messages", "processed_whatsapp_messages"):
+            conn.execute(f"DELETE FROM {table}")
+        return known
+
+
 def guardian_for_conversation(chatwoot_conversation_id: int | None) -> str | None:
     with db() as conn:
         row = conn.execute("SELECT guardian_id FROM conversations WHERE chatwoot_conversation_id=?", (chatwoot_conversation_id,)).fetchone()

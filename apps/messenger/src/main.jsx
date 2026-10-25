@@ -23,13 +23,25 @@ function App() {
     const connect = () => {
       socket = new WebSocket(`${API.replace(/^http/, 'ws')}/ws/${guardian.id}`);
       socket.onopen = () => { attempt = 0; };
-      socket.onmessage = event => setMessages(old => [...old, JSON.parse(event.data)]);
+      socket.onmessage = event => {
+        const item = JSON.parse(event.data);
+        setMessages(old => item.type === 'cleared' ? [] : [...old, item]);
+      };
       socket.onclose = () => { if (!closed) retry = setTimeout(connect, Math.min(1000 * 2 ** attempt++, 15000)); };
     };
     connect();
     const heartbeat = setInterval(() => socket.readyState === 1 && socket.send('ping'), 25000);
     return () => { closed = true; clearTimeout(retry); clearInterval(heartbeat); socket.close(); };
   }, [guardian]);
+
+  async function clearAll() {
+    if (!window.confirm('Apagar TODAS as mensagens do sistema (messenger, assistente e Chatwoot)?')) return;
+    try {
+      const result = await fetch(`${API}/v1/admin/reset`, { method: 'POST' });
+      if (!result.ok) throw new Error(await errorMessage(result));
+      setMessages([]);
+    } catch (error) { window.alert(error.message); }
+  }
 
   async function send(event) {
     event.preventDefault();
@@ -44,9 +56,9 @@ function App() {
     } finally { setBusy(false); }
   }
 
-  if (!guardian) return <Welcome guardians={guardians} choose={setGuardian} />;
+  if (!guardian) return <Welcome guardians={guardians} choose={setGuardian} clearAll={clearAll} />;
   return <main className="shell">
-    <header className="chat-header"><button className="back" onClick={() => setGuardian(null)}>‹</button><div className="avatar">{guardian.name[0]}</div><div><strong>Escola Horizonte</strong><small>Atendimento escolar</small></div><span className="secure">🔒 Ambiente de demonstração</span></header>
+    <header className="chat-header"><button className="back" onClick={() => setGuardian(null)}>‹</button><div className="avatar">{guardian.name[0]}</div><div><strong>Escola Horizonte</strong><small>Atendimento escolar</small></div><button className="clear" onClick={clearAll} title="Apagar todas as mensagens do sistema">🗑 Limpar tudo</button><span className="secure">🔒 Ambiente de demonstração</span></header>
     <section className="conversation">
       <div className="day">HOJE</div>
       {messages.map((message, index) => <Bubble key={index} message={message} />)}
@@ -66,8 +78,8 @@ function bold(text) {
   return text.split(/(\*[^*\n]+\*)/g).map((part, i) => /^\*[^*\n]+\*$/.test(part) ? <strong key={i}>{part.slice(1, -1)}</strong> : part);
 }
 
-function Welcome({ guardians, choose }) {
-  return <main className="welcome"><section className="welcome-card"><div className="school-mark">✦</div><h1>Escola Horizonte</h1><p>Escolha um responsável fictício para iniciar o teste.</p><div className="guardian-list">{guardians.map(item => <button key={item.id} onClick={() => choose(item)}><span className="avatar">{item.name[0]}</span>{item.name}<small>Perfil de demonstração</small></button>)}</div>{!guardians.length && <p className="loading">Preparando os dados da escola…</p>}</section></main>;
+function Welcome({ guardians, choose, clearAll }) {
+  return <main className="welcome"><section className="welcome-card"><div className="school-mark">✦</div><h1>Escola Horizonte</h1><p>Escolha um responsável fictício para iniciar o teste.</p><div className="guardian-list">{guardians.map(item => <button key={item.id} onClick={() => choose(item)}><span className="avatar">{item.name[0]}</span>{item.name}<small>{item.students?.length ? `${item.students.length > 1 ? 'Filhos' : 'Filho(a)'}: ${item.students.join(' e ')}` : 'Perfil de demonstração'}</small></button>)}</div>{!guardians.length && <p className="loading">Preparando os dados da escola…</p>}<button className="clear wide" onClick={clearAll}>🗑 Limpar todas as mensagens</button></section></main>;
 }
 
 function Bubble({ message }) {

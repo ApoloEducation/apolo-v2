@@ -47,6 +47,20 @@ class Chatwoot:
             payload["content_attributes"] = {"apolo_bot": True}
         return await self.request("POST", f"/conversations/{conversation_id}/messages", payload)
 
+    async def delete_conversation_and_contact(self, conversation_id: int | None, contact_id: int | None) -> list[str]:
+        """Best effort; returns what failed. The contact goes too, otherwise Chatwoot rejects re-creating the same identifier."""
+        failed = []
+        for label, path in (("conversa", conversation_id and f"/conversations/{conversation_id}"), ("contato", contact_id and f"/contacts/{contact_id}")):
+            if not path:
+                continue
+            try:
+                await self.request("DELETE", path)
+            except Exception as exc:  # noqa: BLE001
+                if getattr(getattr(exc, "response", None), "status_code", None) != 404:
+                    log.error("reset: falha ao apagar %s %s: %s", label, path, exc)
+                    failed.append(f"{label} {path}")
+        return failed
+
     async def escalate(self, conversation_id: int, category: str = "outros", reason: str = "", question: str = "") -> None:
         """Best effort: a Chatwoot hiccup here must never stop the parent from being told about the handoff."""
         cfg = self.config()

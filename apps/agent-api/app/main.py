@@ -15,7 +15,7 @@ from . import whatsapp
 from .agent import Escalate, answer
 from .chatwoot import Chatwoot, ChatwootUnavailable
 from .state import (claim_webhook_message, claim_whatsapp_message, conversation, guardian_for_conversation, history, initialize,
-                    mark_local_delivery, save_conversation, save_message, was_locally_delivered)
+                    mark_local_delivery, reset_all, save_conversation, save_message, was_locally_delivered)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("apolo.api")
@@ -82,6 +82,25 @@ async def broadcast(guardian_id: str, item: dict):
             stale.append(socket)
     for socket in stale:
         clients[guardian_id].discard(socket)
+
+
+@app.post("/v1/admin/reset")
+async def reset_everything(request: Request):
+    """Wipes the demo: bot history, Chatwoot conversations and every open messenger window. Never reachable through a tunnel."""
+    if any(h in request.headers for h in ("x-forwarded-for", "x-forwarded-host", "forwarded")):
+        raise HTTPException(403, "Limpeza disponível apenas localmente.")
+    known = reset_all()
+    failed = []
+    for item in known:
+        failed += await chatwoot.delete_conversation_and_contact(item["chatwoot_conversation_id"], item["chatwoot_contact_id"])
+    for sockets in clients.values():
+        for socket in list(sockets):
+            try:
+                await socket.send_json({"sender": "system", "type": "cleared", "content": ""})
+            except Exception:  # noqa: BLE001
+                sockets.discard(socket)
+    log.info("reset: %d conversas limpas, falhas no Chatwoot: %s", len(known), failed)
+    return {"status": "cleared", "conversations": len(known), "chatwoot_failures": failed}
 
 
 @app.post("/v1/messages")

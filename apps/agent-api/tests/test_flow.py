@@ -26,6 +26,10 @@ class FakeChatwoot:
     async def escalate(self, conversation_id, category="outros", reason="", question=""):
         self.escalations.append((category, reason, question))
 
+    async def delete_conversation_and_contact(self, conversation_id, contact_id):
+        self.deleted = getattr(self, "deleted", []) + [(conversation_id, contact_id)]
+        return []
+
 
 @pytest.fixture
 def fake(monkeypatch):
@@ -129,3 +133,17 @@ async def test_private_notes_are_not_forwarded(client, fake, monkeypatch):
     await ask(client)
     await webhook(client, **{**human_message(), "private": True})
     assert not [h for h in history("g01") if h["sender"] == "human"]
+
+
+@pytest.mark.anyio
+async def test_reset_wipes_history_and_chatwoot_and_is_refused_through_a_tunnel(client, fake, monkeypatch):
+    async def reply(*_a, **_k):
+        return "Olá!"
+    monkeypatch.setattr(main, "answer", reply)
+    await ask(client, "oi")
+    assert (await client.post("/v1/admin/reset", headers={"X-Forwarded-For": "1.2.3.4"})).status_code == 403
+    assert history("g01")
+    response = await client.post("/v1/admin/reset")
+    assert response.json() == {"status": "cleared", "conversations": 1, "chatwoot_failures": []}
+    assert history("g01") == [] and conversation("g01") is None
+    assert fake.deleted == [(10, 1)]
