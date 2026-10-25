@@ -19,7 +19,10 @@ def health():
 @app.get("/guardians")
 def guardians():
     with connection() as conn:
-        return rows(conn, "SELECT id, name FROM guardians ORDER BY id")
+        result = rows(conn, "SELECT id, name FROM guardians ORDER BY id")
+        for guardian in result:
+            guardian["students"] = [r["name"] for r in conn.execute("SELECT name FROM students WHERE guardian_id=? ORDER BY id", (guardian["id"],))]
+        return result
 
 
 @app.get("/guardians/{guardian_id}/context")
@@ -37,7 +40,8 @@ def guardian_context(guardian_id: str):
             student["attendance"] = {**dict(attendance), "absences": attendance["school_days"] - attendance["present_days"]} if attendance else None
             student["schedule"] = rows(conn, """SELECT sc.weekday, sc.time, sc.subject, t.name teacher FROM schedule sc
                 JOIN teachers t ON t.id=sc.teacher_id WHERE class_id=? ORDER BY time""", (student["class_id"],))
-            student["notices"] = rows(conn, "SELECT title, body, date FROM notices WHERE class_id=? ORDER BY date", (student["class_id"],))
+            student["notices"] = rows(conn, """SELECT title, body, date FROM notices
+                WHERE ',' || REPLACE(class_id, ' ', '') || ',' LIKE '%,' || ? || ',%' ORDER BY date""", (student["class_id"],))
         return {"guardian": dict(guardian), "students": students}
 
 

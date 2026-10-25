@@ -21,6 +21,11 @@ STUDENTS = [
 GUARDIAN_NAMES = ["Marina Almeida", "Carlos Ribeiro", "Juliana Santos", "Roberto Lima", "Patrícia Rocha", "Fernando Carvalho",
                   "Camila Nunes", "André Melo", "Renata Ferreira", "Eduardo Barros", "Luciana Azevedo", "Paulo Freitas"]
 GUARDIANS = [(f"g{i:02}", name) for i, name in enumerate(GUARDIAN_NAMES, 1)]
+# Edge cases added after the first release; ensure_extras() adds them to databases that were already seeded.
+EXTRA_GUARDIANS = [("g13", "Ricardo Oliveira")]  # responsável por dois irmãos em turmas diferentes
+EXTRA_STUDENTS = [("s13", "Júlia Oliveira", "6A", "g13"), ("s14", "Tiago Oliveira", "8C", "g13")]
+# class_id may list several classes separated by commas ("6A,8C"), so one notice can reach more than one class.
+EXTRA_NOTICES = [("6A,8C", "Simulado integrado", "Simulado de Matemática e Português na sexta-feira, às 08h, para o 6º ano A e o 8º ano C.", "2026-10-30")]
 
 
 def seed_database() -> None:
@@ -39,6 +44,7 @@ def seed_database() -> None:
             # Databases seeded before guardians had real names: rename the placeholders in place.
             for guardian_id, name in GUARDIANS:
                 conn.execute("UPDATE guardians SET name=? WHERE id=? AND name LIKE 'Responsável de %'", (name, guardian_id))
+            ensure_extras(conn)
             return
         conn.executemany("INSERT INTO teachers VALUES (?, ?, ?)", TEACHERS)
         conn.executemany("INSERT INTO classes VALUES (?, ?, ?, ?)", CLASSES)
@@ -58,3 +64,20 @@ def seed_database() -> None:
             ("7B", "Feira de Ciências", "Entrega dos projetos em 22 de outubro.", "2026-10-22"),
             ("8C", "Avaliação de Português", "Avaliação bimestral na próxima terça-feira.", "2026-10-13"),
         ])
+        ensure_extras(conn)
+
+
+def ensure_extras(conn) -> None:
+    """Idempotent: adds the sibling guardian and the multi-class notice without touching rows edited by hand."""
+    conn.executemany("INSERT OR IGNORE INTO guardians VALUES (?, ?)", EXTRA_GUARDIANS)
+    conn.executemany("INSERT OR IGNORE INTO students VALUES (?, ?, ?, ?)", EXTRA_STUDENTS)
+    for position, (student_id, *_rest) in enumerate(EXTRA_STUDENTS, start=len(STUDENTS)):
+        if not conn.execute("SELECT 1 FROM grades WHERE student_id=?", (student_id,)).fetchone():
+            conn.executemany("INSERT INTO grades VALUES (?, ?, ?, ?)", [
+                (student_id, "Matemática", "1º bimestre", round(6.5 + (position % 4) * 0.6, 1)),
+                (student_id, "Português", "1º bimestre", round(7.0 + (position % 3) * 0.5, 1)),
+                (student_id, "Ciências", "1º bimestre", round(6.8 + (position % 5) * 0.4, 1))])
+        conn.execute("INSERT OR IGNORE INTO attendance VALUES (?, ?, ?)", (student_id, 42 - (position % 4), 42))
+    for notice in EXTRA_NOTICES:
+        if not conn.execute("SELECT 1 FROM notices WHERE title=?", (notice[1],)).fetchone():
+            conn.execute("INSERT INTO notices (class_id, title, body, date) VALUES (?, ?, ?, ?)", notice)
