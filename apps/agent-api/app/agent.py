@@ -2,6 +2,8 @@ import json
 import logging
 import os
 import re
+import unicodedata
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -26,15 +28,22 @@ HUMAN_REQUEST = re.compile(
 # Things the bot can never actually do; if the model promises them, the parent must really be handed off.
 PROMISE = re.compile(r"(vou\s+(te\s+|lhe\s+)?(encaminhar|enviar|passar|transferir|acelerar|chamar)|(enviar|encaminhar|repassar)\s+(o\s+)?seu\s+(pedido|mensagem)|passar\s+(você|voce)\s+para|transferir\s+(você|voce))", re.I)
 # Topics the school data can never settle (forecasts, exams, school rules): always a human's call.
-NEEDS_HUMAN = re.compile(r"(feriado|recesso|greve|férias|aprova|reprova|passar de ano|passa de ano|\b(vai|para|ir[aá]|consegue|conseguir[aá]?) passar\b|recupera[cç][aã]o|\bprovas?\b|recreio|intervalo)", re.I)
+NEEDS_HUMAN = re.compile(r"(feriado|recesso|greve|férias|aprova|reprova|passar de ano|passa de ano|\b(vai|para|ir[aá]|consegue|conseguir[aá]?) passar\b|recupera[cç][aã]o|\bprovas?\b.{0,25}\b(amanh[aã]|semana|marcad\w*|quando|data|dia)\b|\b(quando|data|dia)\b.{0,25}\bprovas?\b|recreio|intervalo)", re.I)
 SMALLTALK_WORDS = set("oi oii oie olá ola opa e aí ai bom boa dia tarde noite tudo bem td kk kkk kkkk haha hehe como vai vc você voce está esta obrigado obrigada obrigadão valeu brigado brigada muito ok certo beleza blz tá ta entendi perfeito show legal".split())
 THANKS_WORDS = set("obrigado obrigada obrigadão valeu brigado brigada ok certo beleza blz tá ta entendi perfeito show legal".split())
 SCOPE = re.compile(
-    r"(nota|boletim|desempenho|\baulas?\b|hor[aá]rio|falt|frequ[eê]ncia|presen[cç]|ausen|professor|aviso|reuni[aã]o|feira|evento|calend|turma|mat[eé]ria|disciplina"
+    r"(nota|boletim|desempenho|\bprovas?\b|\baulas?\b|hor[aá]rio|falt|frequ[eê]ncia|presen[cç]|ausen|professor|aviso|reuni[aã]o|feira|evento|calend|turma|mat[eé]ria|disciplina"
     r"|matem|portugu|ci[eê]ncias|hist[oó]ria|geografia|ingl[eê]s|\bartes?\b|educa[cç][aã]o f[ií]sica|bimestre|avalia|projeto|entrega|segunda|ter[cç]a|quarta|quinta|sexta"
     r"|como (est[aá]|vai|anda|est[aã]o)|indo\b)", re.I)
 # The model telling the parent "I have no information / ask someone else" is a handoff in disguise.
-REFUSAL = re.compile(r"(n[ãa]o (h[aá]|tenho|possuo|consta|encontr)\w*\s+(informa|registro|dado)|n[ãa]o consta|base de dados|entre em contato|verifique (diretamente )?(com|junto)|diretamente com|dados autorizados|nos dados|\b(geralmente|normalmente|costuma|em geral|provavelmente|possivelmente|talvez)\b|n[ãa]o posso permitir|a escola (n[ãa]o )?(permite|autoriza|exige)|pol[ií]tica da escola|calend[aá]rio escolar|n[ãa]o h[aá] (nenhum|nenhuma|aula|disciplina|atividade))", re.I)
+REFUSAL = re.compile(r"(n[ãa]o (h[aá]|tenho|possuo|consta|encontr)\w*\s+(informa|registro|dado)|n[ãa]o consta|base de dados|entre em contato|verifique (diretamente )?(com|junto)|diretamente com|dados autorizados|nos dados|\b(geralmente|normalmente|costuma|em geral|provavelmente|possivelmente|talvez)\b|n[ãa]o posso permitir|a escola (n[ãa]o )?(permite|autoriza|exige)|pol[ií]tica da escola|calend[aá]rio escolar|n[ãa]o h[aá] (nenhum|nenhuma|aula|disciplina|atividade)|ainda n[ãa]o (foi|h[aá]|tem|est[aá])|ser[aá] (marcad|agendad|divulgad)|receber[aá] (uma )?notifica)", re.I)
+# Words that tie a message to the child even when no school keyword is present ("fala mais sobre ela").
+CHILD_WORDS = re.compile(r"(mais sobre|o que mais|me (fala|conta|diz) mais|conta mais|outras? informa|resumo|tudo (o )?que (sabe|voc[eê] sabe|vc sabe))", re.I)
+# Questions whose answer differs from one child to the next (as opposed to school-wide notices).
+STUDENT_SPECIFIC = re.compile(r"(nota|boletim|desempenho|\bprovas?\b|falt|frequ[eê]ncia|presen[cç]|ausen|\baulas?\b|hor[aá]rio|professor|turma|mat[eé]ria|disciplina|bimestre|matem|portugu|ci[eê]ncias|como (est[aá]|vai|anda)|indo\b|mais sobre|o que mais|me (fala|conta|diz) mais|resumo)", re.I)
+ALL_CHILDREN = re.compile(r"\b(dois|duas|ambos|ambas|todos|todas|filhos|filhas|irm[aã]os|crian[cç]as|cada um)\b", re.I)
+CLARIFY = "Você tem mais de um filho na escola: {names}. De qual deles você está falando?"
+GENERIC_STEMS = {"aluno", "alunos", "quais", "quand", "sobre", "ainda", "estao", "entre", "porqu", "todos", "podem", "devem", "tempo", "fazer", "trazer", "levar", "dia"}
 NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 NOT_A_PERSON = re.compile(r"Escola\s+Horizonte", re.I)
 
@@ -109,20 +118,85 @@ def smalltalk_reply(question: str, guardian_name: str) -> str | None:
     return f"Olá, {guardian_name.split()[0]}! Sou o assistente virtual da Escola Horizonte. Como posso ajudar?"
 
 
+class Clarify(Exception):
+    """Not a handoff: the bot just needs the parent to say which child the question is about."""
+
+
+def plain(text: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFD", text.lower()) if unicodedata.category(c) != "Mn")
+
+
+def data_vocabulary(context: dict) -> set[str]:
+    """5-letter stems of what the school data talks about, so any new notice or subject is searchable without touching the code."""
+    terms: list[str] = []
+    for student in context["students"]:
+        terms += [student["name"], student.get("class_name", ""), student.get("homeroom_teacher", "")]
+        terms += [g["subject"] for g in student.get("grades", [])]
+        for slot in student.get("schedule", []):
+            terms += [slot["subject"], slot["teacher"]]
+        for notice in student.get("notices", []):
+            terms += [notice["title"], notice["body"]]
+    return {w[:5] for term in terms for w in re.findall(r"[a-z]{5,}", plain(term))} - GENERIC_STEMS
+
+
 def in_school_scope(question: str, context: dict) -> bool:
     """Questions that mention nothing the school data covers (e.g. "capital da França", "ônibus") go to a human."""
     words = set(re.findall(r"\w+", question.lower()))
     names = {n for s in context["students"] for n in s["name"].lower().split()}
-    return bool(SCOPE.search(question) or words & names)
+    if SCOPE.search(question) or CHILD_WORDS.search(question) or words & names:
+        return True
+    return bool({w[:5] for w in re.findall(r"[a-z]{5,}", plain(question))} & data_vocabulary(context))
+
+
+def first_name(student: dict) -> str:
+    return student["name"].split()[0]
+
+
+def named_students(text: str, students: list[dict]) -> list[dict]:
+    words = set(re.findall(r"\w+", plain(text)))
+    return [s for s in students if plain(first_name(s)) in words]
+
+
+def pick_student(question: str, context: dict, history: list[dict] | None) -> tuple[dict, str]:
+    """With siblings the data sent to the model is narrowed to the child being discussed; if unclear, ask the parent."""
+    students = context["students"]
+    if len(students) < 2:
+        return context, question
+    history = history or []
+    clarifying = bool(history) and history[-1]["sender"] == "agent" and history[-1]["content"].startswith(CLARIFY.split("{")[0])
+    named = named_students(question, students)
+    if named and clarifying and len(question.split()) <= 5:
+        # The parent only answered "a Júlia": rejoin it with the question that was waiting for a child.
+        earlier = next((h["content"] for h in reversed(history[:-1]) if h["sender"] == "guardian"), "")
+        question = f"{earlier} (sobre {first_name(named[0])})"
+    elif not named:
+        if ALL_CHILDREN.search(question) or not STUDENT_SPECIFIC.search(question):
+            return context, question
+        for item in reversed(history[-6:]):  # "e a frequência dela?" keeps talking about the last child mentioned
+            recent = named_students(item["content"], students)
+            if len(recent) == 1:
+                named = recent
+                break
+        if not named:
+            raise Clarify(CLARIFY.format(names=" e ".join(first_name(s) for s in students)))
+    return {**context, "students": named}, question
 
 
 def numbers_in(text: str) -> set[float]:
     return {float(n.replace(",", ".")) for n in NUMBER.findall(text)}
 
 
+def pt_date(value: str) -> str:
+    """Notices are edited by hand in the admin UI, so accept 2026-10-26 and 26-10-2026 alike."""
+    parts = re.split(r"[-/]", value.strip())
+    if len(parts) == 3 and len(parts[0]) == 4:
+        parts.reverse()
+    return "/".join(parts) if len(parts) == 3 else value
+
+
 def render_context(context: dict) -> str:
     """Plain Portuguese lines are much easier for a small model to read correctly than nested JSON."""
-    lines = [f"Responsável: {(context.get('guardian') or {}).get('name', '')}"]
+    lines = [f"Hoje é {date.today().strftime('%d/%m/%Y')}.", f"Responsável: {(context.get('guardian') or {}).get('name', '')}"]
     for student in context["students"]:
         lines.append(f"\nAluno: {student['name']} - turma {student.get('class_name', '?')} ({student.get('shift', '?')}), professor responsável: {student.get('homeroom_teacher', '?')}")
         if student.get("grades"):
@@ -136,7 +210,7 @@ def render_context(context: dict) -> str:
         for slot in student.get("schedule", []):
             lines.append(f"Aula: {slot['weekday']} {slot['time']} - {slot['subject']} (professor(a) {slot['teacher']})")
         for notice in student.get("notices", []):
-            lines.append(f"Aviso ({notice['date']}): {notice['title']} - {notice['body']}")
+            lines.append(f"Aviso ({pt_date(notice['date'])}): {notice['title']} - {notice['body'].strip()}")
     return "\n".join(lines)
 
 
@@ -162,6 +236,10 @@ async def answer(guardian_id: str, question: str, history: list[dict] | None = N
         return canned
     if not in_school_scope(question, context):
         raise Escalate("assunto fora dos dados da escola", categorize(question), question)
+    try:
+        context, question = pick_student(question, context, history)
+    except Clarify as clarify:
+        return str(clarify)
     payload = {
         "model": os.getenv("OLLAMA_MODEL", "qwen2.5:3b"),
         "stream": False,

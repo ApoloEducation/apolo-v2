@@ -204,3 +204,66 @@ def test_behaviour_questions_are_handed_off():
     with pytest.raises(Escalate) as info:
         guard("O Lucas está mal comportado?", CONTEXT)
     assert info.value.category == "disciplina"
+
+
+BEATRIZ = {"guardian": {"name": "André Melo"}, "students": [{
+    "name": "Beatriz Melo", "class_name": "7º ano B", "homeroom_teacher": "Bruno Costa",
+    "grades": [{"subject": "Matemática", "term": "1º bimestre", "score": 8.3}],
+    "notices": [{"title": "Concurso de Redação", "body": "Dura 3 horas.", "date": "26-10-2026"}]}]}
+SIBLINGS = {"guardian": {"name": "Ricardo Oliveira"}, "students": [
+    {"name": "Júlia Oliveira", "class_name": "6º ano A", "grades": [{"subject": "Matemática", "term": "1º bimestre", "score": 7.0}]},
+    {"name": "Tiago Oliveira", "class_name": "8º ano C", "grades": [{"subject": "Matemática", "term": "1º bimestre", "score": 9.0}]}]}
+
+
+@pytest.mark.parametrize("text", [
+    "como meu filho foi nas últimas provas?", "me fala mais sobre ela, o que mais você sabe?",
+    "vai ter concurso de redação?", "você não consegue ver nada sobre o concurso de redação?"])
+def test_questions_the_data_covers_are_in_scope(text):
+    guard(text, BEATRIZ)
+    assert agent.in_school_scope(text, BEATRIZ)
+
+
+def test_notice_dates_are_normalised_for_the_model():
+    assert "26/10/2026" in agent.render_context(BEATRIZ)
+    assert agent.pt_date("2026-10-22") == "22/10/2026"
+
+
+@pytest.mark.anyio
+async def test_siblings_are_asked_which_child_before_answering(monkeypatch):
+    async def fake_context(_guardian_id):
+        return SIBLINGS
+    monkeypatch.setattr(agent, "school_context", fake_context)
+    monkeypatch.setattr(agent.httpx, "AsyncClient", lambda *a, **k: pytest.fail("model must not be called"))
+    reply = await answer("g13", "qual a nota de matemática?")
+    assert "Júlia e Tiago" in reply
+
+
+@pytest.mark.anyio
+async def test_sibling_named_in_question_or_answer_narrows_the_data(monkeypatch):
+    sent = []
+
+    async def fake_context(_guardian_id):
+        return SIBLINGS
+
+    class Spy(FakeClient):
+        async def post(self, url, json):
+            sent.append(json["messages"][-1]["content"])
+            return await super().post(url, json=json)
+    monkeypatch.setattr(agent, "school_context", fake_context)
+    monkeypatch.setattr(agent.httpx, "AsyncClient", lambda *a, **k: Spy('{"answer":"A nota do Tiago em Matemática foi 9.0.","escalate":false}'))
+    await answer("g13", "qual a nota de matemática do Tiago?")
+    clarification = agent.CLARIFY.format(names="Júlia e Tiago")
+    history = [{"sender": "guardian", "content": "qual a nota de matemática?"}, {"sender": "agent", "content": clarification}]
+    await answer("g13", "o Tiago", history)
+    for prompt in sent:
+        assert "Tiago" in prompt and "Júlia" not in prompt
+    assert "qual a nota de matemática? (sobre Tiago)" in sent[1]
+
+
+@pytest.mark.anyio
+async def test_siblings_asked_about_both_get_all_the_data(monkeypatch):
+    async def fake_context(_guardian_id):
+        return SIBLINGS
+    monkeypatch.setattr(agent, "school_context", fake_context)
+    monkeypatch.setattr(agent.httpx, "AsyncClient", lambda *a, **k: FakeClient('{"answer":"Júlia 7.0 e Tiago 9.0 em Matemática.","escalate":false}'))
+    assert "Júlia" in await answer("g13", "quais as notas dos dois?")
