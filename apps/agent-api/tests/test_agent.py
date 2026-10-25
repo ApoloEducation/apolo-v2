@@ -278,3 +278,21 @@ async def test_auto_greeting_can_be_switched_off(monkeypatch):
     assert "Sou o assistente virtual" in await answer("g01", "oi")
     monkeypatch.setenv("AUTO_GREETING", "off")
     assert await answer("g01", "oi") == "Olá, Marina! Como posso ajudar?"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("text", ["salve", "eae", "👋"])
+async def test_unlisted_one_word_greetings_get_a_hello_not_a_handoff(monkeypatch, text):
+    async def fake_context(_guardian_id):
+        return CONTEXT
+    monkeypatch.setattr(agent, "school_context", fake_context)
+    assert "assistente virtual" in await answer("g01", text)
+
+
+@pytest.mark.anyio
+async def test_vague_request_about_the_child_reaches_the_model(monkeypatch):
+    async def fake_context(_guardian_id):
+        return CONTEXT
+    monkeypatch.setattr(agent, "school_context", fake_context)
+    monkeypatch.setattr(agent.httpx, "AsyncClient", lambda *a, **k: FakeClient('{"answer":"O Lucas tem 8.0 em Matemática.","escalate":false}'))
+    assert "Lucas" in await answer("g01", "eu quero saber sobre a minha filha")

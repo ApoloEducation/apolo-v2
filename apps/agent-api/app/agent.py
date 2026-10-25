@@ -38,9 +38,11 @@ SCOPE = re.compile(
 # The model telling the parent "I have no information / ask someone else" is a handoff in disguise.
 REFUSAL = re.compile(r"(n[ãa]o (h[aá]|tenho|possuo|consta|encontr)\w*\s+(informa|registro|dado)|n[ãa]o consta|base de dados|entre em contato|verifique (diretamente )?(com|junto)|diretamente com|dados autorizados|nos dados|\b(geralmente|normalmente|costuma|em geral|provavelmente|possivelmente|talvez)\b|n[ãa]o posso permitir|a escola (n[ãa]o )?(permite|autoriza|exige)|pol[ií]tica da escola|calend[aá]rio escolar|n[ãa]o h[aá] (nenhum|nenhuma|aula|disciplina|atividade)|ainda n[ãa]o (foi|h[aá]|tem|est[aá])|ser[aá] (marcad|agendad|divulgad)|receber[aá] (uma )?notifica)", re.I)
 # Words that tie a message to the child even when no school keyword is present ("fala mais sobre ela").
-CHILD_WORDS = re.compile(r"(mais sobre|o que mais|me (fala|conta|diz) mais|conta mais|outras? informa|resumo|tudo (o )?que (sabe|voc[eê] sabe|vc sabe))", re.I)
+# "quero saber sobre a minha filha": the parent is asking about the child, even with no school keyword.
+FAMILY_INFO = r"\b(saber|queria|quero|gostaria|sobre|informa\w+|novidades?)\b.{0,40}\b(filh[oa]s?|alun[oa]|menin[oa]|garot[oa]|crian[cç]a)\b"
+CHILD_WORDS = re.compile(FAMILY_INFO + r"|(mais sobre|o que mais|me (fala|conta|diz) mais|conta mais|outras? informa|resumo|tudo (o )?que (sabe|voc[eê] sabe|vc sabe))", re.I)
 # Questions whose answer differs from one child to the next (as opposed to school-wide notices).
-STUDENT_SPECIFIC = re.compile(r"(nota|boletim|desempenho|\bprovas?\b|falt|frequ[eê]ncia|presen[cç]|ausen|\baulas?\b|hor[aá]rio|professor|turma|mat[eé]ria|disciplina|bimestre|matem|portugu|ci[eê]ncias|como (est[aá]|vai|anda)|indo\b|mais sobre|o que mais|me (fala|conta|diz) mais|resumo)", re.I)
+STUDENT_SPECIFIC = re.compile(FAMILY_INFO + r"|(nota|boletim|desempenho|\bprovas?\b|falt|frequ[eê]ncia|presen[cç]|ausen|\baulas?\b|hor[aá]rio|professor|turma|mat[eé]ria|disciplina|bimestre|matem|portugu|ci[eê]ncias|como (est[aá]|vai|anda)|indo\b|mais sobre|o que mais|me (fala|conta|diz) mais|resumo)", re.I)
 ALL_CHILDREN = re.compile(r"\b(dois|duas|ambos|ambas|todos|todas|filhos|filhas|irm[aã]os|crian[cç]as|cada um)\b", re.I)
 CLARIFY = "Você tem mais de um filho na escola: {names}. De qual deles você está falando?"
 GENERIC_STEMS = {"aluno", "alunos", "quais", "quand", "sobre", "ainda", "estao", "entre", "porqu", "todos", "podem", "devem", "tempo", "fazer", "trazer", "levar", "dia"}
@@ -115,7 +117,16 @@ def smalltalk_reply(question: str, guardian_name: str) -> str | None:
         return None
     if set(tokens) & THANKS_WORDS:
         return "Por nada! Estou à disposição se precisar de mais alguma coisa."
+    return greeting_text(guardian_name)
+
+
+def greeting_text(guardian_name: str) -> str:
     return f"Olá, {guardian_name.split()[0]}! Sou o assistente virtual da Escola Horizonte. Como posso ajudar?"
+
+
+def looks_like_greeting(question: str) -> bool:
+    """One or two words, no question and no number ("salve", "eae", "👋") are a hello in a word we do not list, not a school topic."""
+    return len(re.findall(r"\w+", question)) <= 2 and "?" not in question and not NUMBER.search(question)
 
 
 class Clarify(Exception):
@@ -232,10 +243,15 @@ async def answer(guardian_id: str, question: str, history: list[dict] | None = N
     guard(question, context, await student_roster())
     guardian_name = (context.get("guardian") or {}).get("name", "responsável")
     canned = smalltalk_reply(question, guardian_name)
-    if canned and os.getenv("AUTO_GREETING", "on").strip().lower() != "off":
+    auto_greeting = os.getenv("AUTO_GREETING", "on").strip().lower() != "off"
+    if canned and auto_greeting:
         return canned
     if not canned and not in_school_scope(question, context):
-        raise Escalate("assunto fora dos dados da escola", categorize(question), question)
+        if looks_like_greeting(question):
+            if auto_greeting:
+                return greeting_text(guardian_name)
+        else:
+            raise Escalate("assunto fora dos dados da escola", categorize(question), question)
     try:
         context, question = pick_student(question, context, history)
     except Clarify as clarify:

@@ -18,6 +18,7 @@ Pergunta: qual a nota de matemática? -> {"answer": "A nota da Helena em Matemá
 Pergunta: quais as notas dela? -> {"answer": "Matemática 7.1, Português 8.0 e Ciências 6.8 (1º bimestre).", "escalate": false}
 Pergunta: como ela foi nas últimas provas? -> {"answer": "Na Matemática a Helena tirou 7.1, em Português 8.0 e em Ciências 6.8 (1º bimestre).", "escalate": false}
 Pergunta: vai ter concurso de redação? (existe um Aviso sobre isso) -> {"answer": "Sim, o Concurso de Redação será em 26/10/2026 e dura 3 horas.", "escalate": false}
+Pergunta: quero saber sobre a minha filha -> {"answer": "A Helena está no 7º ano B (manhã), com notas 7.1 em Matemática, 8.0 em Português e 6.8 em Ciências, e presença de 95.2%.", "escalate": false}
 Pergunta: oi -> {"answer": "Olá, Fernando! Como posso ajudar?", "escalate": false}
 Pergunta: obrigado -> {"answer": "Por nada! Estou à disposição.", "escalate": false}
 Pergunta: que horas é o recreio? -> {"answer": "", "escalate": true}
