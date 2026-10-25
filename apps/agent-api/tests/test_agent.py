@@ -267,3 +267,14 @@ async def test_siblings_asked_about_both_get_all_the_data(monkeypatch):
     monkeypatch.setattr(agent, "school_context", fake_context)
     monkeypatch.setattr(agent.httpx, "AsyncClient", lambda *a, **k: FakeClient('{"answer":"Júlia 7.0 e Tiago 9.0 em Matemática.","escalate":false}'))
     assert "Júlia" in await answer("g13", "quais as notas dos dois?")
+
+
+@pytest.mark.anyio
+async def test_auto_greeting_can_be_switched_off(monkeypatch):
+    async def fake_context(_guardian_id):
+        return CONTEXT
+    monkeypatch.setattr(agent, "school_context", fake_context)
+    monkeypatch.setattr(agent.httpx, "AsyncClient", lambda *a, **k: FakeClient('{"answer":"Olá, Marina! Como posso ajudar?","escalate":false}'))
+    assert "Sou o assistente virtual" in await answer("g01", "oi")
+    monkeypatch.setenv("AUTO_GREETING", "off")
+    assert await answer("g01", "oi") == "Olá, Marina! Como posso ajudar?"

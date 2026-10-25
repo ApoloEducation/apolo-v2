@@ -232,9 +232,9 @@ async def answer(guardian_id: str, question: str, history: list[dict] | None = N
     guard(question, context, await student_roster())
     guardian_name = (context.get("guardian") or {}).get("name", "responsável")
     canned = smalltalk_reply(question, guardian_name)
-    if canned:
+    if canned and os.getenv("AUTO_GREETING", "on").strip().lower() != "off":
         return canned
-    if not in_school_scope(question, context):
+    if not canned and not in_school_scope(question, context):
         raise Escalate("assunto fora dos dados da escola", categorize(question), question)
     try:
         context, question = pick_student(question, context, history)

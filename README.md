@@ -25,6 +25,8 @@ Credenciais locais do Chatwoot:
 - Administrador: `admin@escola.local` / `ApoloLocal2026!`
 - Atendente: `atendente@escola.local` / `ApoloLocal2026!`
 
+Modelo do Ollama e saudação automática ficam em `settings.env` (opções comentadas; deixe só uma linha `OLLAMA_MODEL` ativa e rode `docker compose up -d agent-api`).
+
 Para apagar todas as mensagens (assistente, Chatwoot e telas abertas) sem derrubar nada, use `./clear.ps1` ou o botão "Limpar tudo" do messenger. O WhatsApp real não permite apagar o que já chegou no celular.
 
 Para interromper, execute `./stop.ps1`. Os volumes Docker são preservados. Para recomeçar completamente, use `docker compose down -v` (isso remove todos os dados locais).

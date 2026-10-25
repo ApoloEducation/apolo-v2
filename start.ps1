@@ -40,7 +40,7 @@ if (-not (Get-Command ollama -ErrorAction SilentlyContinue)) {
 }
 
 if (-not (Test-Path '.env')) { Copy-Item '.env.example' '.env' }
-$model = ((Get-Content '.env' | Where-Object { $_ -match '^OLLAMA_MODEL=' }) -replace '^OLLAMA_MODEL=', '')
+$model = ((Get-Content 'settings.env' | Where-Object { $_ -match '^OLLAMA_MODEL=' }) -replace '^OLLAMA_MODEL=', '' -replace '\s*#.*$', '').Trim()
 if (-not $model) { $model = 'qwen2.5:3b' }
 
 try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 'http://127.0.0.1:11434/api/tags' *> $null } catch {

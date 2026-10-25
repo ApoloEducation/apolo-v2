@@ -105,10 +105,10 @@ services:
 
   agent-api:
     build: ./apps/agent-api
+    env_file: settings.env
     environment:
       SCHOOL_DATA_URL: http://school-data:8000
       OLLAMA_URL: http://host.docker.internal:11434
-      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       CHATWOOT_URL: http://chatwoot:3000
       CHATWOOT_PUBLIC_URL: http://localhost:3000
       AGENT_STATE_DB: /data/agent.sqlite3
