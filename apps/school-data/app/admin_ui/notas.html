@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Notas</title>
+<link rel="stylesheet" href="/admin/assets/common.css">
+<style>
+  .score { width: 88px; margin: 0; text-align: center; font-weight: 600; flex: none; }
+  .score.invalid { border-color: var(--danger); background: var(--danger-soft); }
+  .roster li.changed { background: var(--warn-soft); }
+  .name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+  .row-error { display: block; color: var(--danger); font-size: 12px; font-weight: 400; }
+  .help { margin: 0 0 10px; color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <div class="page-title"><h1>Notas</h1><p>Lance as notas de uma turma por matéria e bimestre.</p></div>
+  <div class="filters">
+    <label>Turma <select id="class"></select></label>
+    <label>Matéria <input id="subject" list="subjects" autocomplete="off"><datalist id="subjects"></datalist></label>
+    <label>Bimestre <select id="term"></select></label>
+  </div>
+  <div class="error" id="error" role="alert"></div>
+  <p class="help" id="help" hidden>Notas de 0 a 10. Enter vai para o próximo aluno. Apagar uma nota e salvar remove o lançamento.</p>
+  <ul class="roster" id="roster"></ul>
+</main>
+<div class="savebar"><div>
+  <span id="summary" aria-live="polite"></span>
+  <button class="primary" id="save" disabled>Salvar notas</button>
+</div></div>
+<script src="/admin/assets/common.js"></script>
+<script>
+(async () => {
+  await Apolo.start();
+  const { el, schoolApi, toast } = Apolo;
+  const $ = id => document.getElementById(id);
+  let students = [], shown = {};
+
+  // null = blank, undefined = invalid. Accepts the Brazilian decimal comma.
+  function parseScore(text) {
+    const value = text.trim().replace(',', '.');
+    if (!value) return null;
+    if (!/^\d{1,2}(\.\d+)?$/.test(value)) return undefined;
+    const score = Number(value);
+    return score <= 10 ? score : undefined;
+  }
+  const display = score => (score === null || score === undefined ? '' : String(score).replace('.', ','));
+  const inputs = () => [...document.querySelectorAll('.score')];
+  const changes = () => {
+    const out = {};
+    inputs().forEach((input, index) => {
+      const student = students[index], score = parseScore(input.value);
+      if (score !== (student.score ?? null)) out[student.id] = score;
+    });
+    return out;
+  };
+  const isDirty = () => Object.keys(changes()).length > 0;
+  Apolo.guardUnsaved(isDirty);
+
+  function refresh() {
+    const parsed = inputs().map(input => parseScore(input.value));
+    const pending = changes();
+    inputs().forEach((input, index) => {
+      const invalid = parsed[index] === undefined, row = input.closest('li');
+      input.classList.toggle('invalid', invalid);
+      input.setAttribute('aria-invalid', String(invalid));
+      row.classList.toggle('changed', !invalid && students[index].id in pending);
+      row.querySelector('.row-error').hidden = !invalid;
+    });
+    const hasInvalid = parsed.includes(undefined);
+    const scores = parsed.filter(score => typeof score === 'number');
+    const average = scores.length ? (scores.reduce((sum, score) => sum + score, 0) / scores.length).toFixed(1).replace('.', ',') : '—';
+    const count = Object.keys(pending).length;
+    $('summary').textContent = students.length
+      ? `Média ${average} · ${scores.length} de ${students.length} lançadas${count ? ` · ${count} ${count === 1 ? 'alteração' : 'alterações'}` : ''}`
+      : '';
+    $('save').disabled = !count || hasInvalid;
+  }
+
+  function renderRow(student) {
+    const input = el('input', {
+      class: 'score', inputMode: 'decimal', autocomplete: 'off', value: display(student.score), 'aria-label': `Nota de ${student.name}`,
+      oninput: refresh,
+      onkeydown: event => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        const all = inputs(), next = all[all.indexOf(input) + 1];
+        next ? next.select() : $('save').focus();
+      },
+    });
+    return el('li', { 'data-student': student.id },
+      el('div', { class: 'name' }, student.name, el('span', { class: 'row-error', hidden: true }, 'Use um número de 0 a 10')),
+      input);
+  }
+
+  const current = () => ({ class_id: $('class').value, subject: $('subject').value.trim(), term: $('term').value });
+
+  async function load() {
+    $('error').textContent = '';
+    if (students.length && isDirty() && !confirm('Descartar as notas não salvas?')) {
+      $('class').value = shown.class_id;
+      $('subject').value = shown.subject;
+      $('term').value = shown.term;
+      return;
+    }
+    const wanted = current();
+    students = [];
+    $('roster').replaceChildren();
+    $('help').hidden = true;
+    refresh();
+    if (!wanted.subject) { $('error').textContent = 'Informe a matéria.'; return; }
+    try {
+      ({ students } = await schoolApi(`/gradebook?${new URLSearchParams(wanted)}`));
+      shown = wanted;
+      $('help').hidden = !students.length;
+      $('roster').replaceChildren(...(students.length ? students.map(renderRow) : [el('li', { class: 'empty' }, 'Esta turma ainda não tem alunos.')]));
+      refresh();
+    } catch (error) { $('error').textContent = error.message; }
+  }
+
+  $('save').onclick = async () => {
+    $('save').disabled = true;
+    $('error').textContent = '';
+    try {
+      const result = await schoolApi('/gradebook', 'POST', { ...shown, scores: changes() });
+      students = [];
+      await load();
+      const parts = [`${result.saved} ${result.saved === 1 ? 'nota salva' : 'notas salvas'}`];
+      if (result.cleared) parts.push(`${result.cleared} ${result.cleared === 1 ? 'removida' : 'removidas'}`);
+      toast(`${parts.join(', ')}.`);
+    } catch (error) { $('error').textContent = error.message; refresh(); }
+  };
+  ['class', 'subject', 'term'].forEach(id => { $(id).onchange = load; });
+
+  try {
+    const { classes, subjects, terms } = await schoolApi('/options');
+    $('class').replaceChildren(...classes.map(item => new Option(item.name, item.id)));
+    $('subjects').replaceChildren(...subjects.map(subject => new Option(subject, subject)));
+    $('term').replaceChildren(...terms.map(term => new Option(term, term)));
+    $('subject').value = subjects[0] || '';
+    if (classes.length && subjects.length) await load();
+  } catch (error) { $('error').textContent = error.message; }
+})();
+</script>
+</body>
+</html>

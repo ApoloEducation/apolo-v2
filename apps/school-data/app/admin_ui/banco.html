@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Banco de dados</title>
+<link rel="stylesheet" href="/admin/assets/common.css">
+<style>
+  .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+  .tabs button.active { background: var(--brand-dark); color: #fff; border-color: var(--brand-dark); }
+  table { border-collapse: collapse; background: #fff; width: 100%; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  th { background: #eef1f4; }
+  .wrap { overflow-x: auto; }
+  .pager { margin-top: 12px; display: flex; gap: 10px; align-items: center; }
+  #add { margin-bottom: 12px; }
+  #fields label { margin-bottom: 10px; }
+  td.ops { white-space: nowrap; }
+</style>
+</head>
+<body>
+<main>
+  <div class="page-title"><h1>Banco de dados</h1><p>Todas as tabelas da escola. Alterações aqui valem imediatamente.</p></div>
+  <div class="tabs" id="tabs"></div>
+  <button id="add" class="primary" hidden>+ Novo registro</button>
+  <div class="error" id="error" role="alert"></div>
+  <div class="wrap"><table id="grid"></table></div>
+  <div class="pager"><button id="prev" aria-label="Página anterior">‹</button><span id="info"></span><button id="next" aria-label="Próxima página">›</button></div>
+</main>
+<dialog id="form"><form id="formEl"><h2 id="formTitle"></h2><div id="fields"></div><div class="error" id="formError" role="alert"></div>
+  <div class="dialog-actions"><button type="button" id="cancel">Cancelar</button><button type="submit" class="primary">Salvar</button></div></form></dialog>
+<script src="/admin/assets/common.js"></script>
+<script>
+(async () => {
+  await Apolo.start();
+  const { api, schoolApi } = Apolo;
+  const $ = id => document.getElementById(id);
+  let schema = {};
+  let editing = null;
+  const state = { table: null, offset: 0, limit: 50, total: 0 };
+  const tablePath = () => `/tables/${state.table}`;
+
+  function cell(value) { const td = document.createElement('td'); td.textContent = value ?? ''; return td; }
+
+  async function render() {
+    $('error').textContent = '';
+    try {
+      const d = await schoolApi(`${tablePath()}?offset=${state.offset}&limit=${state.limit}`);
+      state.total = d.total;
+      const grid = $('grid'); grid.replaceChildren();
+      const meta = schema[state.table];
+      const cols = meta.fields.map(f => f.name);
+      $('add').hidden = !meta.create;
+      const head = grid.insertRow();
+      [...cols, ''].forEach(c => { const th = document.createElement('th'); th.textContent = c; head.appendChild(th); });
+      d.rows.forEach(row => {
+        const tr = grid.insertRow(); cols.forEach(c => tr.appendChild(cell(row[c])));
+        const ops = document.createElement('td'); ops.className = 'ops';
+        const edit = document.createElement('button'); edit.textContent = 'Editar'; edit.className = 'small'; edit.onclick = () => openForm(row);
+        ops.appendChild(edit);
+        if (meta.delete) {
+          const del = document.createElement('button'); del.textContent = 'Excluir'; del.className = 'small danger';
+          del.onclick = () => remove(row); ops.append(' ', del);
+        }
+        tr.appendChild(ops);
+      });
+      $('info').textContent = `${Math.min(state.offset + 1, d.total)}–${Math.min(state.offset + state.limit, d.total)} de ${d.total}`;
+    } catch (e) { $('error').textContent = e.message; }
+  }
+
+  function openForm(row) {
+    editing = row;
+    const meta = schema[state.table];
+    $('formTitle').textContent = (row ? 'Editar' : 'Novo') + ' registro — ' + state.table;
+    $('formError').textContent = '';
+    $('fields').replaceChildren(...meta.fields.map(f => {
+      const label = document.createElement('label'); label.append(f.name);
+      let input;
+      if (f.kind === 'enum') { input = document.createElement('select'); f.options.forEach(o => input.add(new Option(o, o))); }
+      else {
+        input = document.createElement('input');
+        if (f.kind === 'int' || f.kind === 'float') { input.type = 'number'; input.step = f.kind === 'int' ? 1 : 0.1; [input.min, input.max] = f.range; }
+        else if (f.kind === 'date') input.type = 'date';
+        else if (f.kind === 'time') input.type = 'time';
+        else { input.type = 'text'; if (f.kind === 'id') { input.maxLength = 16; input.pattern = '[A-Za-z0-9][A-Za-z0-9_\\-]*'; } }
+      }
+      input.name = f.name; input.required = true;
+      if (row) input.value = row[f.name] ?? '';
+      label.appendChild(input); return label;
+    }));
+    $('form').showModal();
+  }
+
+  async function remove(row) {
+    if (!confirm('Excluir este registro? Esta ação não pode ser desfeita.')) return;
+    $('error').textContent = '';
+    try { await schoolApi(`${tablePath()}/${row._rowid}`, 'DELETE'); await render(); } catch (e) { $('error').textContent = e.message; }
+  }
+
+  $('formEl').onsubmit = async ev => {
+    ev.preventDefault();
+    const data = Object.fromEntries([...$('fields').querySelectorAll('input,select')].map(i => [i.name, i.value]));
+    try {
+      await schoolApi(editing ? `${tablePath()}/${editing._rowid}` : tablePath(), editing ? 'PUT' : 'POST', data);
+      $('form').close(); await render();
+    } catch (e) { $('formError').textContent = e.message; }
+  };
+  $('cancel').onclick = () => $('form').close();
+  $('add').onclick = () => openForm(null);
+  $('prev').onclick = () => { state.offset = Math.max(0, state.offset - state.limit); render(); };
+  $('next').onclick = () => { if (state.offset + state.limit < state.total) { state.offset += state.limit; render(); } };
+
+  try {
+    schema = await api('/admin/schema');
+    const tables = await api('/admin/tables');
+    $('tabs').replaceChildren(...tables.map(t => {
+      const b = document.createElement('button'); b.textContent = t;
+      b.onclick = () => { state.table = t; state.offset = 0; [...$('tabs').children].forEach(x => x.classList.toggle('active', x === b)); render(); };
+      return b;
+    }));
+    $('tabs').firstChild.click();
+  } catch (e) { $('error').textContent = e.message; }
+})();
+</script>
+</body>
+</html>

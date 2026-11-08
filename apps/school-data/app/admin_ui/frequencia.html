@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Frequência</title>
+<link rel="stylesheet" href="/admin/assets/common.css">
+<style>
+  .status { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; color: var(--muted); font-size: 14px; }
+  .toggle { display: inline-flex; flex: none; border: 1px solid #c6d1c9; border-radius: 9px; overflow: hidden; }
+  .toggle button { min-width: 84px; min-height: 40px; border: 0; border-radius: 0; background: #fff; color: var(--muted); }
+  .toggle button + button { border-left: 1px solid #c6d1c9; }
+  .toggle button[aria-pressed="true"].present { background: var(--brand); color: #fff; font-weight: 600; }
+  .toggle button[aria-pressed="true"].absent { background: var(--danger); color: #fff; font-weight: 600; }
+  .roster li.is-absent { background: var(--danger-soft); }
+  .name { min-width: 0; overflow-wrap: anywhere; }
+  @media (max-width: 480px) { .toggle button { min-width: 70px; } .roster li { padding: 10px 12px; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="page-title"><h1>Frequência</h1><p>Todos começam presentes: marque apenas quem faltou.</p></div>
+  <div class="filters">
+    <label>Turma <select id="class"></select></label>
+    <label>Data <input id="date" type="date"></label>
+  </div>
+  <div class="error" id="error" role="alert"></div>
+  <div class="status"><span id="state"></span></div>
+  <ul class="roster" id="roster"></ul>
+</main>
+<div class="savebar"><div>
+  <span id="summary" aria-live="polite"></span>
+  <button class="primary" id="save" disabled>Salvar chamada</button>
+</div></div>
+<script src="/admin/assets/common.js"></script>
+<script>
+(async () => {
+  await Apolo.start();
+  const { el, schoolApi, toast, today } = Apolo;
+  const $ = id => document.getElementById(id);
+  let students = [], absent = new Set(), saved = '', recorded = false, shownClass = '', shownDate = '';
+
+  const signature = () => [...absent].sort().join();
+  const isDirty = () => signature() !== saved;
+  Apolo.guardUnsaved(() => students.length > 0 && isDirty());
+
+  function updateFooter() {
+    const total = students.length;
+    $('summary').textContent = total ? `${total - absent.size} presentes · ${absent.size} ${absent.size === 1 ? 'falta' : 'faltas'}` : '';
+    $('save').disabled = !total || (recorded && !isDirty());
+    $('save').textContent = recorded ? 'Salvar correção' : 'Salvar chamada';
+  }
+
+  function frequency(student) {
+    if (!student.school_days) return 'Sem frequência registrada';
+    const percent = (100 * student.present_days / student.school_days).toFixed(1).replace('.', ',');
+    return `Frequência ${percent}% (${student.present_days}/${student.school_days} dias)`;
+  }
+
+  function renderRow(student) {
+    const isAbsent = absent.has(student.id);
+    const set = value => {
+      value ? absent.add(student.id) : absent.delete(student.id);
+      row.replaceWith(renderRow(student));
+      updateFooter();
+    };
+    const row = el('li', { class: isAbsent ? 'is-absent' : '', 'data-student': student.id },
+      el('div', { class: 'name' }, el('strong', {}, student.name), el('small', {}, frequency(student))),
+      el('div', { class: 'toggle', role: 'group', 'aria-label': `Situação de ${student.name}` },
+        el('button', { type: 'button', class: 'present', 'aria-pressed': String(!isAbsent), onclick: () => set(false) }, 'Presente'),
+        el('button', { type: 'button', class: 'absent', 'aria-pressed': String(isAbsent), onclick: () => set(true) }, 'Falta')));
+    return row;
+  }
+
+  async function load() {
+    $('error').textContent = '';
+    if (students.length && isDirty() && !confirm('Descartar as alterações desta chamada?')) {
+      $('class').value = shownClass;
+      $('date').value = shownDate;
+      return;
+    }
+    if (!$('date').value) { $('error').textContent = 'Escolha uma data.'; return; }
+    try {
+      const params = new URLSearchParams({ class_id: $('class').value, date: $('date').value });
+      const data = await schoolApi(`/attendance?${params}`);
+      students = data.students;
+      recorded = data.recorded;
+      absent = new Set(students.filter(student => student.present === false).map(student => student.id));
+      saved = signature();
+      shownClass = $('class').value;
+      shownDate = $('date').value;
+      $('state').replaceChildren(recorded
+        ? el('span', { class: 'badge' }, 'Chamada já registrada: salvar corrige este dia')
+        : el('span', { class: 'badge warn' }, 'Chamada ainda não registrada'));
+      $('roster').hidden = !students.length;
+      $('roster').replaceChildren(...students.map(renderRow));
+      if (!students.length) $('state').replaceChildren('Esta turma ainda não tem alunos.');
+      updateFooter();
+    } catch (error) {
+      students = [];
+      saved = signature();
+      $('roster').replaceChildren();
+      $('state').replaceChildren();
+      updateFooter();
+      $('error').textContent = error.message;
+    }
+  }
+
+  $('save').onclick = async () => {
+    $('save').disabled = true;
+    $('error').textContent = '';
+    try {
+      const result = await schoolApi('/attendance', 'POST', { class_id: shownClass, date: shownDate, absent: [...absent] });
+      saved = signature();
+      await load();
+      toast(`Chamada salva: ${result.present} presentes, ${result.absent} ${result.absent === 1 ? 'falta' : 'faltas'}.`);
+    } catch (error) { $('error').textContent = error.message; updateFooter(); }
+  };
+  $('class').onchange = load;
+  $('date').onchange = load;
+
+  $('date').value = today();
+  $('date').max = today();
+  try {
+    const { classes } = await schoolApi('/options');
+    $('class').replaceChildren(...classes.map(item => new Option(item.name, item.id)));
+    if (classes.length) await load();
+    else $('state').textContent = 'Cadastre uma turma para fazer a chamada.';
+  } catch (error) { $('error').textContent = error.message; }
+})();
+</script>
+</body>
+</html>
