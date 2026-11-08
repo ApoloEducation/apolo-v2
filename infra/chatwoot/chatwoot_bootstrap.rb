@@ -11,7 +11,8 @@ human_password = ENV.fetch('CHATWOOT_HUMAN_PASSWORD', 'ApoloLocal2026!')
 
 # ── account ───────────────────────────────────────────────────────────────────
 
-account = Account.find_by(name: 'Escola Horizonte — Demo') || Account.create!(name: 'Escola Horizonte — Demo')
+account_name = "#{ENV.fetch('SCHOOL_NAME', 'Escola Horizonte')} — Demo"
+account = Account.find_by(name: account_name) || Account.create!(name: account_name)
 
 # ── users ─────────────────────────────────────────────────────────────────────
 
@@ -83,8 +84,9 @@ output = {
   inbox_id:             inbox.id,
   api_access_token:     token.token,
   human_user_id:        human.id,
+  team_id:              team.id,
   api_inbox_identifier: channel.identifier,
   webhook_url:          channel.webhook_url
 }
-File.write('/bootstrap/integration.json', JSON.pretty_generate(output))
+File.write('/integration/integration.json', JSON.pretty_generate(output))
 puts "Chatwoot demo bootstrap completed for account #{account.id}."

@@ -59,6 +59,7 @@ services:
       - "3000:3000"
     volumes:
       - chatwoot-storage:/app/storage
+      - chatwoot-integration:/integration
       - ./infra/chatwoot:/bootstrap
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api >/dev/null 2>&1 || exit 1"]
@@ -84,7 +85,11 @@ services:
     volumes:
       - school-data:/data
     environment:
-      SCHOOL_DB_PATH: /data/school.sqlite3
+      SCHOOL_DB_DIR: /data/schools
+      ACTIVE_SCHOOL: ${APOLO_SCHOOL:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+    ports:
+      - "127.0.0.1:8001:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -95,17 +100,19 @@ services:
     build: ./apps/agent-api
     environment:
       SCHOOL_DATA_URL: http://school-data:8000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       OLLAMA_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       CHATWOOT_URL: http://chatwoot:3000
       CHATWOOT_PUBLIC_URL: http://localhost:3000
       AGENT_STATE_DB: /data/agent.sqlite3
+      CHATWOOT_CONFIG_PATH: /integration/integration.json
       WEBHOOK_BASE_URL: http://agent-api:8000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:
       - agent-state:/data
-      - ./infra/chatwoot:/bootstrap:ro
+      - chatwoot-integration:/integration:ro
     depends_on:
       school-data:
         condition: service_healthy
@@ -131,6 +138,7 @@ services:
       retries: 20
 
 volumes:
+  chatwoot-integration:
   chatwoot-postgres:
   chatwoot-storage:
   redis:
