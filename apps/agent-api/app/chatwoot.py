@@ -27,14 +27,15 @@ class Chatwoot:
             response.raise_for_status()
             return response.json() if response.content else {}
 
-    async def ensure_contact_and_conversation(self, guardian_id: str, guardian_name: str, existing: dict | None) -> tuple[int, int]:
+    async def ensure_contact_and_conversation(self, school_id: str, guardian_id: str, guardian_name: str, existing: dict | None) -> tuple[int, int]:
         cfg = self.config()
         if existing and existing.get("chatwoot_conversation_id") and existing.get("chatwoot_contact_id"):
             return existing["chatwoot_contact_id"], existing["chatwoot_conversation_id"]
-        contact = await self.request("POST", "/contacts", {"name": guardian_name, "identifier": guardian_id, "custom_attributes": {"demo_guardian_id": guardian_id}})
+        identifier = f"{school_id}:{guardian_id}"  # guardian ids repeat across schools
+        contact = await self.request("POST", "/contacts", {"name": guardian_name, "identifier": identifier, "custom_attributes": {"demo_guardian_id": guardian_id, "school_id": school_id}})
         contact_id = contact["payload"]["contact"]["id"] if "payload" in contact else contact["id"]
-        contact_inbox = await self.request("POST", f"/contacts/{contact_id}/contact_inboxes", {"inbox_id": cfg["inbox_id"], "source_id": guardian_id})
-        source_id = contact_inbox.get("source_id", guardian_id)
+        contact_inbox = await self.request("POST", f"/contacts/{contact_id}/contact_inboxes", {"inbox_id": cfg["inbox_id"], "source_id": identifier})
+        source_id = contact_inbox.get("source_id", identifier)
         created = await self.request("POST", "/conversations", {"source_id": source_id, "inbox_id": cfg["inbox_id"], "contact_id": contact_id})
         return contact_id, created["id"]
 
