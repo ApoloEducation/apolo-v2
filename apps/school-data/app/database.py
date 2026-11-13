@@ -16,7 +16,7 @@ def db_dir() -> Path:
 
 
 def active_school() -> str:
-    """The only school this deployment serves; empty means all of them (tests, benchmarks, start.ps1)."""
+    """The only school this deployment serves; empty means all of them (tests, benchmarks)."""
     return os.getenv("ACTIVE_SCHOOL", "")
 
 

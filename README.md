@@ -6,13 +6,7 @@ Ambiente local de demonstração para avaliar o Chatwoot e um atendimento escola
 
 Pré-requisitos: [Docker Desktop](https://www.docker.com/products/docker-desktop/) em execução, Ollama instalado e acesso à internet no primeiro uso para baixar `qwen2.5:3b`.
 
-**Windows** (PowerShell, na raiz do projeto):
-
-```powershell
-.\start.ps1
-```
-
-**macOS / Linux** (terminal, na raiz do projeto; o Makefile chama os scripts de `scripts/`):
+Em macOS ou Linux (terminal, na raiz do projeto; o Makefile chama os scripts de `scripts/`):
 
 ```bash
 make start        # pergunta a escola e sobe tudo só para ela; SCHOOL=aurora make start pula o menu; NO_BROWSER=1 não abre abas
@@ -34,7 +28,7 @@ Credenciais locais do Chatwoot:
 - Administrador: `admin@escola.local` / `ApoloLocal2026!`
 - Atendente: `atendente@escola.local` / `ApoloLocal2026!`
 
-Para interromper, execute `./stop.ps1` (Windows) ou `make stop` (macOS/Linux). Os volumes Docker são preservados. Para recomeçar completamente, use `docker compose down -v` ou `make reset` (isso remove todos os dados locais).
+Para interromper, execute `make stop`. Os volumes Docker são preservados. Para recomeçar completamente, use `docker compose down -v` ou `make reset` (isso remove todos os dados locais).
 
 ## Como testar o fluxo
 
@@ -55,7 +49,7 @@ Agent API -> School Data (FastAPI + SQLite) -> Ollama qwen2.5:3b
 
 ## Várias escolas
 
-No macOS/Linux, cada escola roda em um ambiente totalmente separado: um projeto Docker Compose próprio (`apolo-school-mvp-<id>`), com seus próprios volumes de banco da escola, Chatwoot (Postgres, Redis, arquivos) e conversas. Só uma escola roda por vez, pois todas usam as mesmas portas; `make start` interrompe a anterior sem apagar nada. Na primeira vez, cada escola prepara seu próprio Chatwoot, o que leva alguns minutos. `make reset` apaga apenas a escola atual; `make reset ALL=1` apaga todas. No Windows, `start.ps1` continua mostrando todas as escolas em um único ambiente.
+Cada escola roda em um ambiente totalmente separado: um projeto Docker Compose próprio (`apolo-school-mvp-<id>`), com seus próprios volumes de banco da escola, Chatwoot (Postgres, Redis, arquivos) e conversas. Só uma escola roda por vez, pois todas usam as mesmas portas; `make start` interrompe a anterior sem apagar nada. Na primeira vez, cada escola prepara seu próprio Chatwoot, o que leva alguns minutos. `make reset` apaga apenas a escola atual; `make reset ALL=1` apaga todas.
 
 Cada escola tem seu próprio arquivo SQLite (`$SCHOOL_DB_DIR/<school_id>.sqlite3`), criado e populado na inicialização a partir do registro `SCHOOLS` em `apps/school-data/app/seed.py`. Para adicionar uma escola, inclua uma entrada nesse registro. Todas as rotas são `/schools/{school_id}/...`; `school_id` é validado (`^[a-z0-9][a-z0-9-]{1,31}$`) e escolas desconhecidas retornam 404. Conversas e mensagens do agente são identificadas por `(school_id, guardian_id)`; bancos antigos são migrados para `horizonte`.
 
@@ -65,7 +59,7 @@ Cada escola tem seu próprio arquivo SQLite (`$SCHOOL_DB_DIR/<school_id>.sqlite3
 
 ## Benchmark
 
-```powershell
+```bash
 python benchmarks/run_benchmark.py --mock-llm   # só guardrails, sem Ollama
 python benchmarks/run_benchmark.py              # modelo real (Ollama + qwen2.5:3b)
 ```
@@ -83,20 +77,20 @@ Mede acurácia das respostas, taxa de escalonamento indevido, recall de escalona
 
 Com Python 3.12 e dependências instaladas para cada serviço:
 
-No macOS/Linux, `make test` cria o `.venv` e roda tudo. No PowerShell:
+`make test` cria o `.venv` e roda tudo. Para rodar manualmente:
 
-```powershell
-Push-Location apps/school-data; python -m pytest tests; Pop-Location
-Push-Location apps/agent-api; python -m pytest tests; Pop-Location
+```bash
+(cd apps/school-data && python -m pytest tests)
+(cd apps/agent-api && python -m pytest tests)
 python -m pytest benchmarks
 ```
 
-Também valide manualmente o fluxo completo listado acima após `./start.ps1`. As APIs de dados não expõem endpoints de SQL genérico ou de alunos fora do perfil autenticado.
+Também valide manualmente o fluxo completo listado acima após `make start`. As APIs de dados não expõem endpoints de SQL genérico ou de alunos fora do perfil autenticado.
 
 ## Solução de problemas
 
 - **Docker não encontrado/em execução:** instale ou abra o Docker Desktop; o script interrompe com uma mensagem acionável.
-- **Ollama não responde:** rode `ollama serve` ou deixe o `start.ps1` iniciá-lo; confirme `ollama list` e `ollama pull qwen2.5:3b`.
+- **Ollama não responde:** rode `ollama serve` ou deixe o `make start` iniciá-lo; confirme `ollama list` e `ollama pull qwen2.5:3b`.
 - **Serviço não inicia:** consulte `docker compose logs agent-api`, `docker compose logs chatwoot` ou `docker compose logs messenger`.
 - **Reset do demo:** `docker compose down -v`, e rode o script novamente.
 

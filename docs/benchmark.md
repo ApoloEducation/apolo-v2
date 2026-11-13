@@ -6,7 +6,7 @@ What the benchmark measures, how to run it, and the results for the models we tr
 
 The runner calls the real `answer()` pipeline (input guard, model, output guard) in-process, against freshly seeded copies of the three school databases (Horizonte, Aurora, Vale Verde). No Chatwoot, no HTTP between services. Each case ends in one of two outcomes: `answered` or `escalated`.
 
-```powershell
+```bash
 python benchmarks/run_benchmark.py --mock-llm                                   # guardrails only, no Ollama
 OLLAMA_URL=http://localhost:11434 python benchmarks/run_benchmark.py            # real model (default qwen2.5:3b)
 OLLAMA_URL=http://localhost:11434 OLLAMA_MODEL=llama3.2:3b python benchmarks/run_benchmark.py

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# macOS/Linux equivalent of start.ps1. Set NO_BROWSER=1 to skip opening the browser.
+# Set NO_BROWSER=1 to skip opening the browser.
 source "$(dirname "$0")/common.sh"
 source "$(dirname "$0")/school.sh"
 

@@ -1,4 +1,4 @@
-# Apolo School MVP: macOS/Linux entry point (Windows keeps using start.ps1 / stop.ps1).
+# Apolo School MVP: macOS/Linux entry point.
 # Commands live in ./scripts. Run `make` or `make help` to list them.
 .DEFAULT_GOAL := help
 .PHONY: help tunnel start stop restart reset logs ps test benchmark benchmark-mock
