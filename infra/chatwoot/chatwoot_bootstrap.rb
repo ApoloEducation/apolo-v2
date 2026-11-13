@@ -54,6 +54,14 @@ label = Label.find_by(account: account, title: 'escalado-humano') ||
 label.description = 'Pergunta encaminhada pelo agente escolar'
 label.save!
 
+# One label per escalation reason, so human managers can filter by theme (see classifier.py / guardrails.py).
+%w[saude disciplina juridico financeiro dados-pessoais terceiros pedido-de-atendente
+   mensagem-longa erro-classificador sem-dados resposta-bloqueada erro-agente].each do |theme|
+  reason = Label.find_by(account: account, title: "motivo-#{theme}") || Label.create!(account: account, title: "motivo-#{theme}")
+  reason.description = "Motivo do encaminhamento: #{theme}"
+  reason.save!
+end
+
 # ── channel + inbox ───────────────────────────────────────────────────────────
 
 WEBHOOK_URL = 'http://agent-api:8000/webhooks/chatwoot'

@@ -23,7 +23,8 @@ case "$LLM_PROVIDER" in
   openrouter)
     [ -n "$(env_value OPENROUTER_MODEL)" ] || fail "Defina OPENROUTER_MODEL no .env para usar LLM=openrouter."
     [ -n "$(env_value OPEN_ROUTER_API_KEY)" ] || fail "Defina OPEN_ROUTER_API_KEY no .env para usar LLM=openrouter."
-    info "LLM: OpenRouter ($(env_value OPENROUTER_MODEL))" ;;
+    [ -n "$(env_value OPENROUTER_CLASSIFIER_MODEL)" ] || fail "Defina OPENROUTER_CLASSIFIER_MODEL no .env (ex.: typesafe/jev-1.13)."
+    info "LLM: OpenRouter ($(env_value OPENROUTER_MODEL); classificador $(env_value OPENROUTER_CLASSIFIER_MODEL))" ;;
   ollama)
     command -v ollama >/dev/null || fail "Ollama necessário. Instale em https://ollama.com (ou 'brew install ollama') e rode 'make start' novamente."
 
@@ -35,10 +36,13 @@ case "$LLM_PROVIDER" in
     wait_for 30 ollama_up || fail "O Ollama não iniciou em 30 segundos. Execute: ollama serve"
   fi
 
-  if ! ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL"; then
-    info "Baixando $MODEL (apenas no primeiro uso; pode levar alguns minutos)"
-    ollama pull "$MODEL"
-  fi
+  CLASSIFIER="$(env_value OLLAMA_CLASSIFIER_MODEL)"; CLASSIFIER="${CLASSIFIER:-d3:2b}"
+  for needed in "$MODEL" "$CLASSIFIER"; do
+    if ! ollama list | awk 'NR>1 {print $1}' | grep -qx "$needed"; then
+      info "Baixando $needed (apenas no primeiro uso; pode levar alguns minutos)"
+      ollama pull "$needed"
+    fi
+  done
     ;;
   *) fail "LLM inválido: $LLM_PROVIDER (use ollama ou openrouter)." ;;
 esac

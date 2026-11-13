@@ -42,8 +42,11 @@ class Chatwoot:
     async def message(self, conversation_id: int, content: str, message_type: str = "incoming") -> dict:
         return await self.request("POST", f"/conversations/{conversation_id}/messages", {"content": content, "message_type": message_type, "private": False})
 
-    async def escalate(self, conversation_id: int) -> None:
+    async def escalate(self, conversation_id: int, theme: str = "outro") -> None:
         cfg = self.config()
-        await self.request("POST", f"/conversations/{conversation_id}/labels", {"labels": ["escalado-humano"]})
+        # The labels endpoint replaces the whole set, so both labels go in one call.
+        await self.request("POST", f"/conversations/{conversation_id}/labels", {"labels": ["escalado-humano", f"motivo-{theme}"]})
+        await self.request("POST", f"/conversations/{conversation_id}/messages",
+                           {"content": f"Motivo do encaminhamento: {theme}", "message_type": "outgoing", "private": True})
         await self.request("POST", f"/conversations/{conversation_id}/assignments", {"team_id": cfg["team_id"], "assignee_id": cfg["human_user_id"]})
         await self.request("POST", f"/conversations/{conversation_id}/toggle_status", {"status": "open"})
