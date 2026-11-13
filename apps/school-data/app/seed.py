@@ -13,6 +13,8 @@ SCHOOLS = {
             ("s09", "Davi Ferreira", "8C"), ("s10", "Laura Barros", "8C"),
             ("s11", "Miguel Azevedo", "8C"), ("s12", "Alice Freitas", "8C"),
         ],
+        "guardians": ["Carlos Almeida", "Patrícia Ribeiro", "Roberto Santos", "Fernanda Lima", "Marcos Rocha", "Juliana Carvalho",
+                      "André Nunes", "Cláudia Melo", "Ricardo Ferreira", "Renata Barros", "Eduardo Azevedo", "Vanessa Freitas"],
         "notices": [
             ("6A", "Reunião de responsáveis", "Encontro na quinta-feira, às 18h30, na sala 6A.", "2026-10-15"),
             ("7B", "Feira de Ciências", "Entrega dos projetos em 22 de outubro.", "2026-10-22"),
@@ -27,6 +29,7 @@ SCHOOLS = {
             ("s01", "Bianca Moreira", "5A"), ("s02", "Caio Teixeira", "5A"), ("s03", "Daniela Pires", "5A"),
             ("s04", "Enzo Cardoso", "9B"), ("s05", "Fabiana Duarte", "9B"), ("s06", "Guilherme Veiga", "9B"),
         ],
+        "guardians": ["Marcelo Moreira", "Tatiana Teixeira", "Sérgio Pires", "Luciana Cardoso", "Alexandre Duarte", "Camila Veiga"],
         "notices": [
             ("5A", "Passeio ao museu", "Saída às 9h do dia 28 de outubro, com autorização assinada.", "2026-10-20"),
             ("9B", "Simulado de Matemática", "Simulado na sexta-feira, às 14h.", "2026-10-17"),
@@ -40,6 +43,7 @@ SCHOOLS = {
             ("s01", "Júlia Matos", "7A"), ("s02", "Kauê Siqueira", "7A"),
             ("s03", "Larissa Cunha", "7A"), ("s04", "Mateus Borges", "7A"),
         ],
+        "guardians": ["Paulo Matos", "Adriana Siqueira", "Rodrigo Cunha", "Simone Borges"],
         "notices": [("7A", "Feira literária", "Exposição de livros na biblioteca em 5 de novembro.", "2026-11-05")],
     },
 }
@@ -64,11 +68,14 @@ def seed_database(school_id: str) -> None:
         CREATE TABLE IF NOT EXISTS notices (id INTEGER PRIMARY KEY, class_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, date TEXT NOT NULL);
         """)
         if conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]:
+            # Databases seeded before guardians had real names still hold "Responsável de <aluno>".
+            for i, name in enumerate(spec["guardians"], 1):
+                conn.execute("UPDATE guardians SET name = ? WHERE id = ? AND name LIKE 'Responsável de %'", (name, f"g{i:02}"))
             return
         conn.execute("INSERT OR REPLACE INTO school VALUES (?, ?)", (school_id, spec["name"]))
         conn.executemany("INSERT INTO teachers VALUES (?, ?, ?)", spec["teachers"])
         conn.executemany("INSERT INTO classes VALUES (?, ?, ?, ?)", spec["classes"])
-        guardians = [(f"g{i:02}", f"Responsável de {name.split()[0]}") for i, (_, name, _) in enumerate(students, 1)]
+        guardians = [(f"g{i:02}", name) for i, name in enumerate(spec["guardians"], 1)]
         conn.executemany("INSERT INTO guardians VALUES (?, ?)", guardians)
         conn.executemany("INSERT INTO students VALUES (?, ?, ?, ?)", [(sid, name, cls, g[0]) for (sid, name, cls), g in zip(students, guardians)])
         grades = []
