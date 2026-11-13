@@ -5,11 +5,16 @@ source "$(dirname "$0")/common.sh"
 if [ ! -x .venv/bin/python ]; then
   info "Criando .venv"
   if command -v uv >/dev/null; then uv venv --python 3.12 .venv; else python3.12 -m venv .venv || fail "Python 3.12 não encontrado. Instale (brew install python@3.12) ou use uv."; fi
+fi
+# (Re)install when the venv is new or requirements.txt changed since the last install.
+if [ ! -f .venv/.installed ] || [ apps/agent-api/requirements.txt -nt .venv/.installed ]; then
+  info "Instalando dependências"
   if command -v uv >/dev/null; then
-    uv pip install -q --python .venv/bin/python -r apps/agent-api/requirements.txt anyio websockets
+    uv pip install -q --python .venv/bin/python -r apps/agent-api/requirements.txt anyio websockets tqdm
   else
-    .venv/bin/pip install -q -r apps/agent-api/requirements.txt anyio websockets
+    .venv/bin/pip install -q -r apps/agent-api/requirements.txt anyio websockets tqdm
   fi
+  touch .venv/.installed
 fi
 
 for dir in apps/school-data apps/agent-api; do
