@@ -67,6 +67,8 @@ O `.env` é criado a partir de `.env.example` no primeiro `make start`. Variáve
 | --- | --- |
 | `OLLAMA_MODEL` | Modelo local do Ollama (padrão no exemplo: `qwen2.5:14b`) |
 | `OPENROUTER_MODEL`, `OPEN_ROUTER_API_KEY` | Modelo e chave usados com `make start LLM=openrouter` |
+| `OLLAMA_CLASSIFIER_MODEL`, `OPENROUTER_CLASSIFIER_MODEL` | Modelo de decisão que classifica o tema de cada mensagem (padrão: `d3:2b` e `typesafe/jev-1.13`) |
+| `CLASSIFIER_BLOCK_THRESHOLD`, `CLASSIFIER_TIMEOUT` | Probabilidade somada dos temas sensíveis a partir da qual encaminha (0,30; menor = mais rígido) e tempo limite da chamada |
 | `ADMIN_TOKEN` | Habilita o painel da escola; vazio = painel desativado |
 | `CORS_ORIGINS` | Origens de navegador permitidas na Agent API |
 | `META_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_ALLOWED_NUMBERS` | Integração com o WhatsApp (veja o final deste arquivo) |
@@ -90,7 +92,7 @@ e inicie com:
 make start LLM=openrouter
 ```
 
-Nesse modo o `make start` não exige nem inicia o Ollama, e falha com uma mensagem clara se `OPENROUTER_MODEL` ou `OPEN_ROUTER_API_KEY` estiverem vazios. A escolha vale apenas para essa execução: sem `LLM=openrouter`, volta ao Ollama (`make restart` não repassa o parâmetro; use `make stop` e depois `make start LLM=openrouter`). As perguntas e dados autorizados são enviados ao OpenRouter, então use apenas dados fictícios. O benchmark continua usando o Ollama.
+Nesse modo o `make start` não exige nem inicia o Ollama, e falha com uma mensagem clara se `OPENROUTER_MODEL` ou `OPEN_ROUTER_API_KEY` estiverem vazios. A escolha vale apenas para essa execução: sem `LLM=openrouter`, volta ao Ollama (`make restart` não repassa o parâmetro; use `make stop` e depois `make start LLM=openrouter`). As perguntas e dados autorizados são enviados ao OpenRouter, então use apenas dados fictícios. O benchmark usa o mesmo `LLM_PROVIDER` (do ambiente ou do `.env`): `LLM_PROVIDER=openrouter make benchmark`.
 
 ## Várias escolas
 
@@ -100,7 +102,13 @@ As três escolas acima vêm do registro; no Mini-WhatsApp há um seletor de esco
 
 ## Guardrails
 
-`apps/agent-api/app/guardrails.py` aplica três camadas, sempre com falha fechada (qualquer violação encaminha para um humano): **entrada** (temas sensíveis, injeção de prompt, outros alunos por nome completo/primeiro nome, outras escolas, tamanho), **contexto** (o modelo só recebe campos necessários, sem IDs) e **saída** (sem nomes de outros alunos, URLs ou código, e todo número da resposta precisa existir nos dados autorizados).
+Os prompts dos modelos ficam em `configs/`: `configs/agent.toml` (quem é o Apolo, tom, regras, mensagens válidas e inválidas) e `configs/classifier.toml` (os temas). `make prompt` mostra o prompt montado; depois de editar, `docker compose restart agent-api` aplica a mudança sem rebuild.
+
+Cada mensagem passa primeiro por um classificador de tema (`apps/agent-api/app/classifier.py`, temas em `configs/classifier.toml`), um modelo de decisão (`d3:2b` no Ollama, `typesafe/jev-1.13` no OpenRouter) que escolhe um entre 16 temas. Temas sensíveis (saúde, disciplina, jurídico, financeiro, dados pessoais, outros alunos, outras turmas, outras escolas) encaminham para um humano, com a etiqueta `motivo-<tema>` no Chatwoot. Injeção de prompt e assuntos fora da escola recebem uma recusa educada, sem encaminhar. Cortesias (oi, obrigado) e perguntas escolares (notas, frequência, horários, avisos) são respondidas. Todo tema fica salvo por mensagem, e `GET /v1/themes?school=<id>&since=AAAA-MM-DD&until=AAAA-MM-DD` conta as mensagens por tema. `apps/agent-api/app/guardrails.py` aplica o limite de tamanho (600 caracteres) e, sempre com falha fechada (qualquer violação encaminha para um humano), as camadas de **contexto** (o modelo só recebe campos necessários, sem IDs) e **saída** (sem nomes de outros alunos, URLs ou código, e todo número da resposta precisa existir nos dados autorizados).
+
+## Adicionando uma ferramenta ao agente
+
+O agente (`apps/agent-api/app/agent.py`) é um `Agent` do [Pydantic AI](https://pydantic.dev/docs/ai/) com uma ferramenta, `run_sql`. Para adicionar outra: escreva uma função `@apolo.tool` (a docstring e os parâmetros tipados são o que o modelo lê; dados por conversa ficam em `ctx.deps`), coloque em `configs/agent.toml` qualquer texto que o modelo veja, e adicione um caso em `benchmarks/cases/`. Os guardrails continuam fora do agente: o classificador roda antes e `check_output` depois, sem nova tentativa. Nos testes, o modelo é um `FunctionModel` roteirizado (veja `Script` em `apps/agent-api/tests/test_agent.py`).
 
 ## Documentação adicional
 
@@ -110,16 +118,17 @@ As três escolas acima vêm do registro; no Mini-WhatsApp há um seletor de esco
 ## Benchmark
 
 ```bash
-python benchmarks/run_benchmark.py --mock-llm   # só guardrails, sem Ollama
+python benchmarks/run_benchmark.py --mock-llm          # só guardrails, sem Ollama
+python benchmarks/run_benchmark.py --mock-classifier   # modelo real, mas com o tema esperado de cada caso (isola o agente)
 python benchmarks/run_benchmark.py              # modelo real (Ollama; OLLAMA_URL=http://localhost:11434, modelo em OLLAMA_MODEL)
 ```
 
-Mede acurácia das respostas, taxa de escalonamento indevido, recall de escalonamento, vazamentos (deve ser 0; o script sai com código 1 caso contrário), erros e latência p50/p95. Resultados em `benchmarks/results/` (ignorado pelo git). Casos extras podem ser adicionados em `benchmarks/cases/guardrails.jsonl` (guardrails) e `benchmarks/cases/conversations.jsonl` (conversas). `make benchmark` e `make benchmark-mock` fazem o mesmo pelo Makefile.
+Cada caso tem um comportamento esperado (responder com o fato certo, encaminhar a um humano ou recusar) e passa ou falha; a métrica principal é a taxa de casos aprovados, com vazamentos (deve ser 0; o script sai com código 1 caso contrário), encaminhamentos desnecessários, latência e custo ao lado. Cada execução completa entra em `benchmarks/history.jsonl` e reconstrói `benchmarks/report.html` (abra no navegador: ranking dos setups, áreas em que cada um falha e os casos que falharam). Os rastros completos (resposta, SQL, probabilidades do classificador) ficam em `benchmarks/results/` (ignorado pelo git). Opções úteis: `--runs 3` (repete para medir instabilidade), `--model` e `--classifier` (troca os modelos), `--classifier-only` (só o classificador, muito barato), `--filter REGEX` (alguns casos). Casos ficam em `benchmarks/cases/*.jsonl` (`guardrails.jsonl`, `conversations.jsonl`, `coverage.jsonl`). `make benchmark` e `make benchmark-mock` fazem o mesmo pelo Makefile.
 
 ## Estrutura
 
 - `apps/messenger`: interface web de demonstração.
-- `apps/agent-api`: ponte Chatwoot, guardrails, laço de SQL, WebSocket, webhook do WhatsApp e LLM (Ollama/OpenRouter).
+- `apps/agent-api`: ponte Chatwoot, guardrails, agente [Pydantic AI](https://pydantic.dev/docs/ai/) com a ferramenta `run_sql` (`app/agent.py`; modelo Ollama/OpenRouter em `app/llm.py`), WebSocket e webhook do WhatsApp.
 - `apps/school-data`: bases SQLite por escola (dados fictícios), API de leitura restrita e painel `/admin`.
 - `infra/chatwoot`: bootstrap idempotente da conta, Inbox API, equipe e etiqueta.
 - `benchmarks` e `docs`: casos de benchmark, relatório, e detalhes de guardrails.
