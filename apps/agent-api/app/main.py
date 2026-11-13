@@ -1,14 +1,19 @@
+import hmac
+import json
+import logging
 import os
 from collections import defaultdict
 
 import httpx
-from fastapi import FastAPI, HTTPException, Path, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Path, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
+from . import whatsapp
 from .agent import Escalate, answer
 from .chatwoot import Chatwoot, ChatwootUnavailable
-from .state import (consume_local_delivery, conversation, conversation_by_chatwoot_id, expect_local_delivery, history, initialize, mark_local_delivery,
+from .state import (claim_wamid, consume_local_delivery, conversation, conversation_by_chatwoot_id, expect_local_delivery, history, initialize, mark_local_delivery,
                     save_conversation, save_message, was_locally_delivered)
 
 app = FastAPI(title="Apolo Agent API")
@@ -19,6 +24,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+log = logging.getLogger("agent-api")
 clients: dict[str, set[WebSocket]] = defaultdict(set)
 chatwoot = Chatwoot()
 HANDOFF = "Vou encaminhar sua mensagem para nossa equipe de atendimento. Um atendente responderá por aqui assim que possível."
@@ -87,24 +93,25 @@ def key(school_id: str, guardian_id: str) -> str:
     return f"{school_id}/{guardian_id}"
 
 
-@app.post("/v1/messages")
-async def create_message(message: MessageIn):
-    school, guardian = message.school_id, message.guardian_id
-    if guardian not in {g["id"] for g in await school_data(f"/schools/{school}/guardians")}:
+async def handle_incoming(school: str, guardian: str, name: str | None, content: str) -> dict:
+    """Channel-agnostic: store, mirror to Chatwoot, answer (or escalate). Used by the web UI and WhatsApp."""
+    guardians = {g["id"]: g for g in await school_data(f"/schools/{school}/guardians")}
+    if guardian not in guardians:
         raise HTTPException(404, "Responsável não encontrado")
+    name = name or guardians[guardian].get("name") or guardian
     current = conversation(school, guardian)
     previous = history(school, guardian)  # before saving this message: it is passed to the model separately
-    save_message(school, guardian, "guardian", message.content)
-    await broadcast(key(school, guardian), {"sender": "guardian", "content": message.content})
+    save_message(school, guardian, "guardian", content)
+    await broadcast(key(school, guardian), {"sender": "guardian", "content": content})
     try:
-        contact_id, conversation_id = await chatwoot.ensure_contact_and_conversation(school, guardian, message.guardian_name, current)
+        contact_id, conversation_id = await chatwoot.ensure_contact_and_conversation(school, guardian, name, current)
         mode = current["mode"] if current else "auto"
         save_conversation(school, guardian, conversation_id, contact_id, mode)
-        await chatwoot.message(conversation_id, message.content, "incoming")
+        await chatwoot.message(conversation_id, content, "incoming")
         if mode == "human":
             return {"status": "queued"}
         try:
-            reply = await answer(school, guardian, message.content, previous)
+            reply = await answer(school, guardian, content, previous)
         except Escalate:
             reply = HANDOFF
             await chatwoot.escalate(conversation_id)
@@ -117,6 +124,59 @@ async def create_message(message: MessageIn):
         return {"status": "answered", "reply": reply}
     except ChatwootUnavailable as exc:
         raise HTTPException(503, str(exc))
+
+
+@app.post("/v1/messages")
+async def create_message(message: MessageIn):
+    return await handle_incoming(message.school_id, message.guardian_id, message.guardian_name, message.content)
+
+
+@app.get("/webhooks/whatsapp")
+def whatsapp_verify(request: Request):
+    q = request.query_params
+    expected = os.getenv("WHATSAPP_VERIFY_TOKEN")
+    if expected and q.get("hub.mode") == "subscribe" and hmac.compare_digest(q.get("hub.verify_token", ""), expected):
+        return PlainTextResponse(q.get("hub.challenge", ""))
+    raise HTTPException(403, "Verification failed")
+
+
+async def process_whatsapp_message(msg: dict):
+    sender = msg.get("from", "")
+    target = whatsapp.allowed_numbers().get(sender)
+    if not target:
+        log.info("Ignoring WhatsApp message from unmapped number")
+        return
+    school, guardian = target
+    try:
+        if msg.get("type") != "text":
+            await whatsapp.send_text(sender, "Por enquanto só consigo ler mensagens de texto.")
+            return
+        text = (msg.get("text", {}).get("body") or "").strip()[:2000]
+        if not text:
+            return
+        result = await handle_incoming(school, guardian, None, text)
+        if result.get("reply"):
+            await whatsapp.send_text(sender, result["reply"])
+    except Exception:
+        log.exception("Failed to process WhatsApp message")
+        await whatsapp.send_text(sender, "Desculpe, tive um problema ao processar sua mensagem. Tente novamente em instantes.")
+
+
+@app.post("/webhooks/whatsapp")
+async def whatsapp_webhook(request: Request, background: BackgroundTasks):
+    body = await request.body()
+    if not whatsapp.valid_signature(body, request.headers.get("X-Hub-Signature-256")):
+        raise HTTPException(403, "Invalid signature")
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        raise HTTPException(400, "Invalid JSON")
+    for entry in payload.get("entry", []):
+        for change in entry.get("changes", []):
+            for msg in (change.get("value") or {}).get("messages", []):
+                if msg.get("id") and claim_wamid(msg["id"]):
+                    background.add_task(process_whatsapp_message, msg)
+    return {"ok": True}
 
 
 @app.post("/webhooks/chatwoot")
@@ -138,6 +198,9 @@ async def chatwoot_webhook(payload: dict):
             mark_local_delivery(payload.get("id"))  # also makes webhook retries idempotent
             save_message(row["school_id"], row["guardian_id"], "human", content)
             await broadcast(key(row["school_id"], row["guardian_id"]), {"sender": "human", "content": content})
+            number = whatsapp.number_for(row["school_id"], row["guardian_id"])
+            if number and content:
+                await whatsapp.send_text(number, content)
     return {"ok": True}
 
 

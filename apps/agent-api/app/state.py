@@ -34,6 +34,9 @@ def initialize():
         CREATE TABLE IF NOT EXISTS locally_delivered_chatwoot_messages (
           chatwoot_message_id INTEGER PRIMARY KEY
         );
+        CREATE TABLE IF NOT EXISTS processed_wamids (
+          wamid TEXT PRIMARY KEY
+        );
         CREATE TABLE IF NOT EXISTS pending_outgoing (
           id INTEGER PRIMARY KEY AUTOINCREMENT, chatwoot_conversation_id INTEGER NOT NULL, content TEXT NOT NULL, created REAL NOT NULL
         );
@@ -102,6 +105,12 @@ def was_locally_delivered(chatwoot_message_id: int | None) -> bool:
         return False
     with db() as conn:
         return conn.execute("SELECT 1 FROM locally_delivered_chatwoot_messages WHERE chatwoot_message_id=?", (chatwoot_message_id,)).fetchone() is not None
+
+
+def claim_wamid(wamid: str) -> bool:
+    """True the first time a WhatsApp message id is seen (Meta retries webhooks)."""
+    with db() as conn:
+        return conn.execute("INSERT OR IGNORE INTO processed_wamids VALUES (?)", (wamid,)).rowcount == 1
 
 
 PENDING_TTL_SECONDS = 120
