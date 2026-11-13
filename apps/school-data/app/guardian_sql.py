@@ -18,7 +18,7 @@ MAX_ROWS = 50
 MAX_SECONDS = 2.0
 GUARDIAN_ID = re.compile(r"^[a-z0-9]{1,16}$")
 ALLOWED_FUNCTIONS = {"avg", "sum", "count", "min", "max", "round", "abs", "total", "coalesce", "ifnull", "nullif", "lower", "upper",
-                     "length", "substr", "cast", "printf", "group_concat", "date", "strftime", "iif", "typeof", "max", "min"}
+                     "length", "substr", "like", "instr", "trim", "replace", "cast", "printf", "group_concat", "date", "strftime", "iif", "typeof", "max", "min"}
 
 SCHEMA_DOC = """Tabelas (somente leitura; já filtradas para os filhos do responsável):
 students(id, name, class_id, guardian_id)
