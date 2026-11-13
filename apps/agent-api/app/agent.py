@@ -95,6 +95,14 @@ async def school_query(school_id: str, guardian_id: str, sql: str) -> dict:
 
 
 async def _chat(messages: list[dict]) -> str:
+    if os.getenv("LLM_PROVIDER") == "openrouter":
+        payload = {"model": os.getenv("OPENROUTER_MODEL", ""), "temperature": 0,
+                   "response_format": {"type": "json_object"}, "messages": messages}
+        headers = {"Authorization": f"Bearer {os.getenv('OPEN_ROUTER_API_KEY', '')}"}
+        async with httpx.AsyncClient(timeout=float(os.getenv("OLLAMA_TIMEOUT", "90"))) as client:
+            response = await client.post("https://openrouter.ai/api/v1/chat/completions", json=payload, headers=headers)
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
     payload = {"model": os.getenv("OLLAMA_MODEL", "qwen2.5:3b"), "stream": False, "format": "json",
                "options": {"temperature": 0}, "messages": messages}
     if os.getenv("OLLAMA_THINK"):  # reasoning models (qwen3): "1"/"true" enables thinking, "0"/"false" disables it

@@ -103,6 +103,9 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       OLLAMA_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
+      OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
+      OPEN_ROUTER_API_KEY: ${OPEN_ROUTER_API_KEY:-}
       CHATWOOT_URL: http://chatwoot:3000
       CHATWOOT_PUBLIC_URL: http://localhost:3000
       AGENT_STATE_DB: /data/agent.sqlite3

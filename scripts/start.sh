@@ -17,20 +17,31 @@ if ! docker info >/dev/null 2>&1; then
     fail "Docker Desktop não está em execução. Abra o Docker Desktop e aguarde o mecanismo ficar pronto."
   fi
 fi
-command -v ollama >/dev/null || fail "Ollama necessário. Instale em https://ollama.com (ou 'brew install ollama') e rode 'make start' novamente."
+# LLM=openrouter uses OPENROUTER_MODEL + OPEN_ROUTER_API_KEY from .env instead of local Ollama.
+export LLM_PROVIDER="${LLM:-ollama}"
+case "$LLM_PROVIDER" in
+  openrouter)
+    [ -n "$(env_value OPENROUTER_MODEL)" ] || fail "Defina OPENROUTER_MODEL no .env para usar LLM=openrouter."
+    [ -n "$(env_value OPEN_ROUTER_API_KEY)" ] || fail "Defina OPEN_ROUTER_API_KEY no .env para usar LLM=openrouter."
+    info "LLM: OpenRouter ($(env_value OPENROUTER_MODEL))" ;;
+  ollama)
+    command -v ollama >/dev/null || fail "Ollama necessário. Instale em https://ollama.com (ou 'brew install ollama') e rode 'make start' novamente."
 
-MODEL="$(env_value OLLAMA_MODEL)"; MODEL="${MODEL:-qwen2.5:3b}"
+    MODEL="$(env_value OLLAMA_MODEL)"; MODEL="${MODEL:-qwen2.5:3b}"
 
-if ! ollama_up >/dev/null; then
-  info "Iniciando o Ollama"
-  nohup ollama serve >"${TMPDIR:-/tmp}/ollama-serve.log" 2>&1 &
-  wait_for 30 ollama_up || fail "O Ollama não iniciou em 30 segundos. Execute: ollama serve"
-fi
+    if ! ollama_up >/dev/null; then
+    info "Iniciando o Ollama"
+    nohup ollama serve >"${TMPDIR:-/tmp}/ollama-serve.log" 2>&1 &
+    wait_for 30 ollama_up || fail "O Ollama não iniciou em 30 segundos. Execute: ollama serve"
+  fi
 
-if ! ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL"; then
-  info "Baixando $MODEL (apenas no primeiro uso; pode levar alguns minutos)"
-  ollama pull "$MODEL"
-fi
+  if ! ollama list | awk 'NR>1 {print $1}' | grep -qx "$MODEL"; then
+    info "Baixando $MODEL (apenas no primeiro uso; pode levar alguns minutos)"
+    ollama pull "$MODEL"
+  fi
+    ;;
+  *) fail "LLM inválido: $LLM_PROVIDER (use ollama ou openrouter)." ;;
+esac
 
 # All stacks publish the same ports, so only one school runs at a time. `down` keeps each school's volumes.
 for project in $(compose_projects); do
