@@ -29,7 +29,8 @@ def initialize():
         );
         CREATE TABLE IF NOT EXISTS messages (
           id INTEGER PRIMARY KEY AUTOINCREMENT, school_id TEXT NOT NULL DEFAULT 'horizonte', guardian_id TEXT NOT NULL,
-          sender TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP
+          sender TEXT NOT NULL, content TEXT NOT NULL, created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          theme TEXT, outcome TEXT
         );
         CREATE TABLE IF NOT EXISTS locally_delivered_chatwoot_messages (
           chatwoot_message_id INTEGER PRIMARY KEY
@@ -60,6 +61,9 @@ def _migrate_single_school(conn):
         """)
     if "school_id" not in [row["name"] for row in conn.execute("PRAGMA table_info(messages)")]:
         conn.execute("ALTER TABLE messages ADD COLUMN school_id TEXT NOT NULL DEFAULT 'horizonte'")
+    if "theme" not in [row["name"] for row in conn.execute("PRAGMA table_info(messages)")]:
+        conn.execute("ALTER TABLE messages ADD COLUMN theme TEXT")
+        conn.execute("ALTER TABLE messages ADD COLUMN outcome TEXT")
 
 
 def conversation(school_id: str, guardian_id: str):
@@ -83,9 +87,30 @@ def save_conversation(school_id: str, guardian_id: str, conversation_id: int | N
             updated_at=CURRENT_TIMESTAMP""", (school_id, guardian_id, conversation_id, contact_id, mode))
 
 
-def save_message(school_id: str, guardian_id: str, sender: str, content: str):
+def save_message(school_id: str, guardian_id: str, sender: str, content: str, theme: str | None = None, outcome: str | None = None) -> int:
     with db() as conn:
-        conn.execute("INSERT INTO messages (school_id, guardian_id, sender, content) VALUES (?, ?, ?, ?)", (school_id, guardian_id, sender, content))
+        return conn.execute("INSERT INTO messages (school_id, guardian_id, sender, content, theme, outcome) VALUES (?, ?, ?, ?, ?, ?)",
+                            (school_id, guardian_id, sender, content, theme, outcome)).lastrowid
+
+
+def set_message_theme(message_id: int, theme: str, outcome: str) -> None:
+    """Guardian messages get their theme and outcome (answered / declined / escalated / queued) once classified, for later analysis."""
+    with db() as conn:
+        conn.execute("UPDATE messages SET theme=?, outcome=? WHERE id=?", (theme, outcome, message_id))
+
+
+def theme_counts(school_id: str, since: str | None = None, until: str | None = None) -> list[dict]:
+    """Guardian messages per theme and outcome. `since` / `until` are YYYY-MM-DD (until is exclusive)."""
+    query = "SELECT theme, outcome, COUNT(*) AS total FROM messages WHERE school_id=? AND sender='guardian' AND theme IS NOT NULL"
+    args: list = [school_id]
+    if since:
+        query += " AND created_at >= ?"
+        args.append(since)
+    if until:
+        query += " AND created_at < ?"
+        args.append(until)
+    with db() as conn:
+        return [dict(row) for row in conn.execute(query + " GROUP BY theme, outcome ORDER BY total DESC", args)]
 
 
 def history(school_id: str, guardian_id: str):

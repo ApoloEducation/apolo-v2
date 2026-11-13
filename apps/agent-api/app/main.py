@@ -5,16 +5,17 @@ import os
 from collections import defaultdict
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Path, Request, WebSocket, WebSocketDisconnect
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Path, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel, Field
 
 from . import whatsapp
-from .agent import Escalate, answer
+from .agent import Answer, Escalate, answer
 from .chatwoot import Chatwoot, ChatwootUnavailable
+from .config import load_agent, load_classifier
 from .state import (claim_wamid, consume_local_delivery, conversation, conversation_by_chatwoot_id, expect_local_delivery, history, initialize, mark_local_delivery,
-                    save_conversation, save_message, was_locally_delivered)
+                    save_conversation, save_message, set_message_theme, theme_counts, was_locally_delivered)
 
 app = FastAPI(title="Apolo Agent API")
 app.add_middleware(
@@ -27,6 +28,7 @@ app.add_middleware(
 log = logging.getLogger("agent-api")
 clients: dict[str, set[WebSocket]] = defaultdict(set)
 chatwoot = Chatwoot()
+DECLINE_REPLY = "Posso ajudar com assuntos escolares dos seus filhos, como notas, frequência, horários e avisos. Como posso ajudar?"
 HANDOFF = "Vou encaminhar sua mensagem para nossa equipe de atendimento. Um atendente responderá por aqui assim que possível."
 
 
@@ -44,6 +46,8 @@ class MessageIn(BaseModel):
 @app.on_event("startup")
 def startup():
     initialize()
+    for name, loaded in (("agent", load_agent()), ("classifier", load_classifier())):
+        log.info("prompt %s: %s (version %s)", name, loaded["_path"], loaded.get("version", "?"))
 
 
 @app.get("/health")
@@ -101,7 +105,7 @@ async def handle_incoming(school: str, guardian: str, name: str | None, content:
     name = name or guardians[guardian].get("name") or guardian
     current = conversation(school, guardian)
     previous = history(school, guardian)  # before saving this message: it is passed to the model separately
-    save_message(school, guardian, "guardian", content)
+    message_id = save_message(school, guardian, "guardian", content)
     await broadcast(key(school, guardian), {"sender": "guardian", "content": content})
     try:
         contact_id, conversation_id = await chatwoot.ensure_contact_and_conversation(school, guardian, name, current)
@@ -109,21 +113,34 @@ async def handle_incoming(school: str, guardian: str, name: str | None, content:
         save_conversation(school, guardian, conversation_id, contact_id, mode)
         await chatwoot.message(conversation_id, content, "incoming")
         if mode == "human":
+            set_message_theme(message_id, "atendimento-humano", "queued")
             return {"status": "queued"}
+        status = "answered"
         try:
-            reply = await answer(school, guardian, content, previous)
-        except Escalate:
-            reply = HANDOFF
-            await chatwoot.escalate(conversation_id)
+            result: Answer = await answer(school, guardian, content, previous)
+            reply = DECLINE_REPLY if result.declined else result.text
+            status = "declined" if result.declined else "answered"
+            set_message_theme(message_id, result.theme, status)
+        except Escalate as exc:
+            reply, status = HANDOFF, "answered"
+            set_message_theme(message_id, exc.theme, "escalated")
+            await chatwoot.escalate(conversation_id, exc.theme)
             save_conversation(school, guardian, conversation_id, contact_id, "human")
         expect_local_delivery(conversation_id, reply)
         outgoing = await chatwoot.message(conversation_id, reply, "outgoing")
         mark_local_delivery(outgoing.get("id"))
         save_message(school, guardian, "agent", reply)
         await broadcast(key(school, guardian), {"sender": "agent", "content": reply})
-        return {"status": "answered", "reply": reply}
+        return {"status": status, "reply": reply}
     except ChatwootUnavailable as exc:
         raise HTTPException(503, str(exc))
+
+
+@app.get("/v1/themes")
+def themes(school: str = Query(pattern=SCHOOL_PATTERN), since: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
+           until: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")):
+    """Guardian messages per theme and outcome (for monthly reviews). `since` inclusive, `until` exclusive, YYYY-MM-DD."""
+    return theme_counts(school, since, until)
 
 
 @app.post("/v1/messages")
