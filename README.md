@@ -99,3 +99,12 @@ Também valide manualmente o fluxo completo listado acima após `./start.ps1`. A
 - **Ollama não responde:** rode `ollama serve` ou deixe o `start.ps1` iniciá-lo; confirme `ollama list` e `ollama pull qwen2.5:3b`.
 - **Serviço não inicia:** consulte `docker compose logs agent-api`, `docker compose logs chatwoot` ou `docker compose logs messenger`.
 - **Reset do demo:** `docker compose down -v`, e rode o script novamente.
+
+## WhatsApp real (Meta Cloud API, modo de teste)
+
+1. No `.env`: `META_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN` (qualquer texto) e `WHATSAPP_ALLOWED_NUMBERS=<seu número com DDI>:<escola>:<responsável>` (ex.: `5511999999999:horizonte:g01`). Remetentes fora da lista são ignorados.
+2. `make start` e, em outro terminal, `make tunnel` (ngrok).
+3. No painel da Meta (WhatsApp > Configuration): Callback URL `https://<host-ngrok>/webhooks/whatsapp`, Verify token igual ao `.env`, e assine o campo `messages`. Adicione seu número como destinatário de teste.
+4. Envie uma mensagem do seu celular para o número de teste. A resposta do agente e as respostas de atendentes do Chatwoot chegam no WhatsApp.
+
+Limitações: só texto; fora da janela de 24h a Meta exige templates (não implementado).
