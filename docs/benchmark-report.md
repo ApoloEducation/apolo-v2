@@ -80,7 +80,7 @@ Notes:
 
 ## How design B works, and why it is safe
 
-Each turn the model replies with one JSON object: `{"sql": ...}` to query, or `{"answer": ...}` to finish (at most 7 calls per question). Queries run in the school-data service (`apps/school-data/app/guardian_sql.py`, `POST /schools/{id}/guardians/{gid}/query`).
+The model calls the `run_sql` tool as often as it needs and then replies in plain text, at most 7 model requests per question. Since round 4 this is a [Pydantic AI](https://pydantic.dev/docs/ai/) agent with native tool calling; before that, each turn was one JSON object (`{"sql": ...}` or `{"answer": ...}`) parsed by a hand-written loop. Queries run in the school-data service (`apps/school-data/app/guardian_sql.py`, `POST /schools/{id}/guardians/{gid}/query`).
 
 The SQL is written by an LLM that reads untrusted text, so the scoping does not rely on the model:
 
