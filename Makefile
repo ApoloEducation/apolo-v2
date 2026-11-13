@@ -1,7 +1,7 @@
 # Apolo School MVP: macOS/Linux entry point.
 # Commands live in ./scripts. Run `make` or `make help` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help tunnel start stop restart reset logs ps test benchmark benchmark-mock
+.PHONY: help tunnel start stop restart reset logs ps test prompt benchmark benchmark-mock
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,8 +31,11 @@ ps: ## Show container status
 test: ## Run all pytest suites in .venv
 	@scripts/test.sh
 
-benchmark: ## Run the benchmark against the real model (needs Ollama)
-	@scripts/benchmark.sh
+prompt: ## Print the prompts the models get, from configs/agent.toml and configs/classifier.toml
+	@scripts/prompt.sh
+
+benchmark: ## Run the benchmark on the real models and rebuild benchmarks/report.html (LLM_PROVIDER=openrouter; ARGS="--runs 3 --model X --classifier Y")
+	@scripts/benchmark.sh $(ARGS)
 
 benchmark-mock: ## Run the benchmark with canned replies (guardrails only, no Ollama)
 	@scripts/benchmark.sh --mock-llm

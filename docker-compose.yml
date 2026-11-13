@@ -100,11 +100,16 @@ services:
     build: ./apps/agent-api
     environment:
       SCHOOL_DATA_URL: http://school-data:8000
+      APOLO_CONFIG_DIR: /app/configs  # model prompts; ./configs is mounted below, so edits need only a restart
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       OLLAMA_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       OPENROUTER_MODEL: ${OPENROUTER_MODEL:-}
+      OLLAMA_CLASSIFIER_MODEL: ${OLLAMA_CLASSIFIER_MODEL:-d3:2b}
+      OPENROUTER_CLASSIFIER_MODEL: ${OPENROUTER_CLASSIFIER_MODEL:-typesafe/jev-1.13}
+      CLASSIFIER_BLOCK_THRESHOLD: ${CLASSIFIER_BLOCK_THRESHOLD:-0.30}
+      CLASSIFIER_TIMEOUT: ${CLASSIFIER_TIMEOUT:-30}
       OPEN_ROUTER_API_KEY: ${OPEN_ROUTER_API_KEY:-}
       CHATWOOT_URL: http://chatwoot:3000
       CHATWOOT_PUBLIC_URL: http://localhost:3000
@@ -121,6 +126,7 @@ services:
     volumes:
       - agent-state:/data
       - chatwoot-integration:/integration:ro
+      - ./configs:/app/configs:ro
     depends_on:
       school-data:
         condition: service_healthy
