@@ -6,10 +6,10 @@
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-tunnel: ## Expose agent-api (8000) via ngrok for the WhatsApp webhook
-	@command -v ngrok >/dev/null || { echo "Install ngrok first: https://ngrok.com/download"; exit 1; }
-	@echo "Meta callback URL: https://<ngrok-host>/webhooks/whatsapp"
-	ngrok http 8000
+tunnel: ## Expose agent-api (8000) via a Cloudflare quick tunnel for the WhatsApp webhook
+	@command -v cloudflared >/dev/null || { echo "Install cloudflared first: brew install cloudflared"; exit 1; }
+	@echo "Meta callback URL: https://<host>.trycloudflare.com/webhooks/whatsapp (the host is printed below and changes on every run)"
+	cloudflared tunnel --url http://localhost:8000
 
 start: ## Ask which school to run, then start everything for it (SCHOOL=<id> skips the menu, LLM=openrouter uses OpenRouter, NO_BROWSER=1 skips tabs)
 	@scripts/start.sh

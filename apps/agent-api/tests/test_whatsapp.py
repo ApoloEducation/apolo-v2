@@ -79,3 +79,35 @@ def test_human_chatwoot_reply_is_forwarded_to_whatsapp(client):
     client.post("/webhooks/chatwoot", json={"event": "message_created", "message_type": "outgoing", "private": False,
                                             "id": 77, "content": "Olá!", "conversation": {"id": 4}})
     assert client.sent == [("5511999999999", "Olá!")]
+
+
+def test_brazilian_number_is_accepted_in_both_forms(monkeypatch):
+    from app import whatsapp
+    monkeypatch.setenv("WHATSAPP_ALLOWED_NUMBERS", "5511999999999:aurora:g06,14155550000:aurora:g01")
+    assert whatsapp.br_variant("5511999999999") == "551199999999"
+    assert whatsapp.br_variant("551199999999") == "5511999999999"
+    assert whatsapp.br_variant("14155550000") is None
+    allowed = whatsapp.allowed_numbers()
+    assert allowed["551199999999"] == ("aurora", "g06")
+    assert whatsapp.number_for("aurora", "g06") == "5511999999999"
+
+
+def test_send_retries_other_brazilian_form_when_not_in_allowed_list(monkeypatch):
+    import asyncio
+    import httpx
+    from app import whatsapp
+    monkeypatch.setenv("META_API_TOKEN", "t")
+    monkeypatch.setenv("WHATSAPP_PHONE_NUMBER_ID", "1")
+    sent = []
+
+    def handler(request):
+        to = json.loads(request.content)["to"]
+        sent.append(to)
+        if len(to) == 12:
+            return httpx.Response(400, json={"error": {"code": 131030}})
+        return httpx.Response(200, json={})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(whatsapp.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler)))
+    asyncio.run(whatsapp.send_text("551199999999", "oi"))
+    assert sent == ["551199999999", "5511999999999"]
