@@ -17,8 +17,9 @@ Pré-requisitos: [Docker Desktop](https://www.docker.com/products/docker-desktop
 Em macOS ou Linux (terminal, na raiz do projeto; o Makefile chama os scripts de `scripts/`):
 
 ```bash
-make start        # pergunta a escola e sobe tudo só para ela; SCHOOL=aurora make start pula o menu; NO_BROWSER=1 não abre abas
-make start LLM=openrouter   # usa o OpenRouter em vez do Ollama local (veja abaixo)
+make start        # assistente guiado (TUI): escolhe a escola, sobe tudo com OpenRouter, abre o túnel e guia Meta/Chatwoot/painel/iPhone; SCHOOL=aurora pula o menu
+make start LLM=ollama       # usa o Ollama local em vez do OpenRouter
+make start-plain  # o start antigo, sem túnel nem guia (SCHOOL, LLM, NO_BROWSER)
 make stop         # interrompe, mantendo os dados
 make help         # lista todos os comandos (restart, reset, logs, ps, test, benchmark, benchmark-mock, tunnel)
 ```
@@ -27,12 +28,12 @@ O script cria `.env` a partir de `.env.example`, inicia o Ollama se necessário 
 
 | Serviço | Endereço |
 | --- | --- |
-| Mini-WhatsApp | http://localhost:5173 |
+| Mini-WhatsApp (se a 5173 estiver ocupada, o `make start` usa a próxima porta livre e grava em `MESSENGER_PORT` no `.env`) | http://localhost:5173 |
 | Chatwoot | http://localhost:3000 |
 | Agent API (diagnóstico) | http://localhost:8000/health |
-| Painel da escola (requer `ADMIN_TOKEN` no `.env`; só acessível da própria máquina) | http://localhost:8001/admin |
+| Painel da escola (sem login; só acessível da própria máquina) | http://localhost:8001/admin |
 
-O painel tem quatro páginas: **avisos** (`/admin/avisos`), **frequência** (chamada diária, `/admin/frequencia`), **notas** (`/admin/notas`) e **banco** (edição das tabelas, `/admin/banco`). Ao abrir, informe o valor de `ADMIN_TOKEN` na tela de entrada. O painel serve a escola escolhida no `make start` (o seletor de escola do topo só aparece quando há mais de uma). A frequência diária ajusta os totais que o agente lê; as demais alterações também valem para as respostas do agente.
+O painel tem quatro páginas: **avisos** (`/admin/avisos`), **frequência** (chamada diária, `/admin/frequencia`), **notas** (`/admin/notas`) e **banco** (edição das tabelas, `/admin/banco`). O painel serve a escola escolhida no `make start` (o seletor de escola do topo só aparece quando há mais de uma). A frequência diária ajusta os totais que o agente lê; as demais alterações também valem para as respostas do agente.
 
 Credenciais locais do Chatwoot:
 
@@ -69,7 +70,6 @@ O `.env` é criado a partir de `.env.example` no primeiro `make start`. Variáve
 | `OPENROUTER_MODEL`, `OPEN_ROUTER_API_KEY` | Modelo e chave usados com `make start LLM=openrouter` |
 | `OLLAMA_CLASSIFIER_MODEL`, `OPENROUTER_CLASSIFIER_MODEL` | Modelo de decisão que classifica o tema de cada mensagem (padrão: `d3:2b` e `typesafe/jev-1.13`) |
 | `CLASSIFIER_BLOCK_THRESHOLD`, `CLASSIFIER_TIMEOUT` | Probabilidade somada dos temas sensíveis a partir da qual encaminha (0,30; menor = mais rígido) e tempo limite da chamada |
-| `ADMIN_TOKEN` | Habilita o painel da escola; vazio = painel desativado |
 | `CORS_ORIGINS` | Origens de navegador permitidas na Agent API |
 | `META_API_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_VERIFY_TOKEN`, `WHATSAPP_APP_SECRET`, `WHATSAPP_ALLOWED_NUMBERS` | Integração com o WhatsApp (veja o final deste arquivo) |
 | `CHATWOOT_*` | Segredos e contas locais do Chatwoot |
@@ -157,9 +157,10 @@ Também valide manualmente o fluxo completo listado acima após `make start`. A 
 
 ## WhatsApp real (Meta Cloud API, modo de teste)
 
+0. **Quem é quem:** cadastre o WhatsApp de cada responsável no painel da escola, em **Responsáveis** (`/admin/responsaveis`): nome, telefone e filhos. O número que escreve é reconhecido por esse cadastro, e o Apolo responde sobre os filhos dele; números não cadastrados são ignorados. `WHATSAPP_ALLOWED_NUMBERS` (abaixo) continua valendo só como alternativa para desenvolvimento.
 1. No `.env`: `META_API_TOKEN` (token de acesso), `WHATSAPP_PHONE_NUMBER_ID` (o "Phone Number ID" do número de teste no painel da Meta, não o seu telefone), `WHATSAPP_VERIFY_TOKEN` (qualquer texto que você inventar; não é o token de acesso) e `WHATSAPP_ALLOWED_NUMBERS=<seu número com DDI>:<escola>:<responsável>` (ex.: `5511999999999:horizonte:g01`). Remetentes fora da lista são ignorados; números brasileiros valem com ou sem o 9 extra.
 2. `make start` e, em outro terminal, `make tunnel` (requer [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/), `brew install cloudflared`; expõe a porta 8000 sem precisar de conta). O endereço `https://<host>.trycloudflare.com` aparece no terminal e muda a cada execução.
-3. No painel da Meta (WhatsApp > Configuração > Configurar webhooks): Callback URL `https://<host>.trycloudflare.com/webhooks/whatsapp`, Verify token igual ao `WHATSAPP_VERIFY_TOKEN` do `.env`, e assine o campo `messages`. Adicione seu número como destinatário de teste. Ao reiniciar o túnel, atualize a Callback URL.
-4. Envie uma mensagem do seu celular para o número de teste. A resposta do agente e as respostas de atendentes do Chatwoot chegam no WhatsApp.
+3. No painel da Meta (WhatsApp > Configuração > Configurar webhooks): Callback URL `https://<host>.trycloudflare.com/webhooks/whatsapp`, Verify token igual ao `WHATSAPP_VERIFY_TOKEN` do `.env`, e assine o campo `messages`. Adicione seu número como destinatário de teste. Ao reiniciar o túnel, atualize a Callback URL. O `make start` faz isso sozinho pela API (URL de webhook do número, que tem prioridade sobre a do app) quando o `META_API_TOKEN` tem a permissão `whatsapp_business_management`; sem ela, o assistente guia o passo no painel, com a URL e o Verify token na área de transferência.
+4. Envie uma mensagem do seu celular para o número de teste. A resposta do agente e as respostas de atendentes do Chatwoot chegam no WhatsApp. O celular escreve primeiro: a Meta só aceita respostas do Apolo até 24 h depois da última mensagem do pai. Fora dessa janela o envio falha depois (erro 131047), e o agent-api registra o aviso `WhatsApp delivery failed` no log.
 
 Limitações: só texto; fora da janela de 24h a Meta exige templates (não implementado).

@@ -9,7 +9,6 @@ from fastapi.testclient import TestClient
 def client(monkeypatch):
     with tempfile.TemporaryDirectory() as directory:
         monkeypatch.setenv("SCHOOL_DB_DIR", directory)
-        monkeypatch.setenv("ADMIN_TOKEN", "secret")
         from app.main import app
         with TestClient(app) as test_client:
             yield test_client
@@ -37,32 +36,20 @@ def test_unknown_or_malicious_school_is_404(client, school_id):
     assert client.get(f"/schools/{school_id}/stats").status_code == 404
 
 
-def test_admin_requires_token_and_allowlists_tables(client):
+def test_admin_needs_no_sign_in_and_allowlists_tables(client):
     url = "/admin/schools/horizonte/tables/students"
-    assert client.get(url).status_code == 401
-    assert client.get(url, headers={"Authorization": "Bearer wrong"}).status_code == 401
-    ok = client.get(url, headers={"Authorization": "Bearer secret"}).json()
+    ok = client.get(url).json()
     assert ok["total"] == 12 and len(ok["rows"]) == 12
-    assert client.get("/admin/schools/horizonte/tables/sqlite_master", headers={"Authorization": "Bearer secret"}).status_code == 404
+    assert client.get("/admin/schools/horizonte/tables/sqlite_master").status_code == 404
     page = client.get("/admin/banco")
     assert page.status_code == 200
     for control in ("Novo registro", "Editar", "Excluir", "somente leitura"):
         assert (control in page.text) == (control != "somente leitura"), control
 
 
-def test_admin_disabled_without_token(client, monkeypatch):
-    monkeypatch.delenv("ADMIN_TOKEN")
-    assert client.get("/admin").status_code == 404
-    assert client.get("/admin/tables", headers={"Authorization": "Bearer "}).status_code == 404
-
-
-def _h():
-    return {"Authorization": "Bearer secret"}
-
-
 def test_admin_crud_validates(client):
     base = "/admin/schools/horizonte/tables"
-    listed = client.get(f"{base}/notices", headers=_h()).json()["rows"]
+    listed = client.get(f"{base}/notices").json()["rows"]
     assert "_rowid" in listed[0]
     bad = [
         ("grades", {"student_id": "zzz", "subject": "x", "term": "t", "score": 5}),
@@ -75,22 +62,21 @@ def test_admin_crud_validates(client):
         ("teachers", {"id": "t9", "name": "", "subject": "x"}),
     ]
     for table, payload in bad:
-        assert client.post(f"{base}/{table}", json=payload, headers=_h()).status_code == 422, (table, payload)
-    created = client.post(f"{base}/teachers", json={"id": "t9", "name": "Nova", "subject": "Artes"}, headers=_h())
+        assert client.post(f"{base}/{table}", json=payload).status_code == 422, (table, payload)
+    created = client.post(f"{base}/teachers", json={"id": "t9", "name": "Nova", "subject": "Artes"})
     assert created.status_code == 201
     rid = created.json()["_rowid"]
-    assert client.put(f"{base}/teachers/{rid}", json={"id": "t9", "name": "Nova 2", "subject": "Artes"}, headers=_h()).status_code == 200
-    assert client.delete(f"{base}/teachers/{rid}", headers=_h()).status_code == 200
-    assert client.delete(f"{base}/teachers/{rid}", headers=_h()).status_code == 404
+    assert client.put(f"{base}/teachers/{rid}", json={"id": "t9", "name": "Nova 2", "subject": "Artes"}).status_code == 200
+    assert client.delete(f"{base}/teachers/{rid}").status_code == 200
+    assert client.delete(f"{base}/teachers/{rid}").status_code == 404
 
 
-def test_admin_blocks_referenced_delete_and_requires_token(client):
+def test_admin_blocks_referenced_delete(client):
     base = "/admin/schools/horizonte/tables"
-    teacher = next(r for r in client.get(f"{base}/teachers", headers=_h()).json()["rows"] if r["id"] == "t1")
-    assert client.delete(f"{base}/teachers/{teacher['_rowid']}", headers=_h()).status_code == 409
-    assert client.put(f"{base}/teachers/{teacher['_rowid']}", json={"id": "tX", "name": "A", "subject": "B"}, headers=_h()).status_code == 409
-    assert client.delete(f"{base}/teachers/{teacher['_rowid']}").status_code == 401
-    assert client.post(f"{base}/school", json={}, headers=_h()).status_code == 404
+    teacher = next(r for r in client.get(f"{base}/teachers").json()["rows"] if r["id"] == "t1")
+    assert client.delete(f"{base}/teachers/{teacher['_rowid']}").status_code == 409
+    assert client.put(f"{base}/teachers/{teacher['_rowid']}", json={"id": "tX", "name": "A", "subject": "B"}).status_code == 409
+    assert client.post(f"{base}/school", json={}).status_code == 404
 
 
 def test_active_school_serves_only_that_school(client, monkeypatch):
@@ -105,8 +91,8 @@ def test_active_school_serves_only_that_school(client, monkeypatch):
         assert client.get(url).status_code == 404, url
     assert client.post("/schools/horizonte/guardians/g01/query", json={"sql": "SELECT * FROM grades"}).status_code == 404
     for url in ("/admin/schools/horizonte/tables/students", "/admin/schools/horizonte/notices", "/admin/schools/horizonte/options"):
-        assert client.get(url, headers=_h()).status_code == 404, url
-    assert client.post("/admin/schools/horizonte/tables/teachers", json={"id": "t9", "name": "x", "subject": "y"}, headers=_h()).status_code == 404
+        assert client.get(url).status_code == 404, url
+    assert client.post("/admin/schools/horizonte/tables/teachers", json={"id": "t9", "name": "x", "subject": "y"}).status_code == 404
 
 
 def test_active_school_creates_only_its_database(monkeypatch, tmp_path):

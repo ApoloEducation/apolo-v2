@@ -65,6 +65,15 @@ def test_non_text_gets_a_polite_reply(client):
     assert "texto" in client.sent[0][1]
 
 
+def test_failed_delivery_status_is_logged(client, caplog):
+    status = {"id": "wamid.out", "status": "failed", "errors": [{"code": 131047, "title": "Re-engagement message",
+                                                               "error_data": {"details": "more than 24 hours have passed"}}]}
+    with caplog.at_level("WARNING", logger="agent-api"):
+        assert client.post("/webhooks/whatsapp", json={"entry": [{"changes": [{"value": {"statuses": [status]}}]}]}).status_code == 200
+    assert "131047" in caplog.text and "24 hours" in caplog.text
+    assert client.handled == [] and client.sent == []
+
+
 def test_signature_enforced_when_app_secret_set(client, monkeypatch):
     monkeypatch.setenv("WHATSAPP_APP_SECRET", "appsecret")
     body = json.dumps(payload()).encode()
@@ -111,3 +120,32 @@ def test_send_retries_other_brazilian_form_when_not_in_allowed_list(monkeypatch)
     monkeypatch.setattr(whatsapp.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler)))
     asyncio.run(whatsapp.send_text("551199999999", "oi"))
     assert sent == ["551199999999", "5511999999999"]
+
+
+def test_sender_is_identified_by_the_school_registry_first(client, monkeypatch):
+    from app import whatsapp
+    calls = []
+
+    async def fake_lookup(path):
+        calls.append(path)
+        return {"school_id": "horizonte", "guardian_id": "g03", "name": "Roberto"} if "lookup/phone/5537999242395" in path else None
+    monkeypatch.setattr(whatsapp, "_school_data", fake_lookup)
+    client.post("/webhooks/whatsapp", json=payload(sender="5537999242395"))
+    assert client.handled == [("horizonte", "g03", "nota?")]
+    # an unregistered number still falls back to WHATSAPP_ALLOWED_NUMBERS, and anything else is ignored
+    client.post("/webhooks/whatsapp", json=payload(wamid="wamid.2"))
+    assert client.handled[-1] == ("aurora", "g06", "nota?")
+    client.post("/webhooks/whatsapp", json=payload(wamid="wamid.3", sender="5599000000000"))
+    assert len(client.handled) == 2
+
+
+def test_human_reply_goes_to_the_registered_phone(client, monkeypatch):
+    import asyncio
+    from app import whatsapp
+
+    async def fake_lookup(path):
+        return {"phone": "5537999242395"} if path.endswith("/phone") else None
+    monkeypatch.setattr(whatsapp, "_school_data", fake_lookup)
+    assert asyncio.run(whatsapp.number_of("horizonte", "g03")) == "5537999242395"
+    monkeypatch.setattr(whatsapp, "_school_data", lambda path: asyncio.sleep(0, None))
+    assert asyncio.run(whatsapp.number_of("aurora", "g06")) == "5511999999999"  # .env fallback

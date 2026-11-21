@@ -84,7 +84,7 @@
         else if (f.kind === 'time') input.type = 'time';
         else { input.type = 'text'; if (f.kind === 'id') { input.maxLength = 16; input.pattern = '[A-Za-z0-9][A-Za-z0-9_\\-]*'; } }
       }
-      input.name = f.name; input.required = true;
+      input.name = f.name; input.required = f.kind !== 'phone';
       if (row) input.value = row[f.name] ?? '';
       label.appendChild(input); return label;
     }));

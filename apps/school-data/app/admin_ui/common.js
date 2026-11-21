@@ -1,13 +1,7 @@
-// Shared by every staff page: sign-in, navigation, school selection and API calls.
+// Shared by every staff page: navigation, school selection and API calls. No sign-in: the panel is local-only.
 const Apolo = (() => {
-  const TOKEN_KEY = 'apolo-admin-token';
-  const NAV = [['/admin', 'Início'], ['/admin/avisos', 'Avisos'], ['/admin/frequencia', 'Frequência'], ['/admin/notas', 'Notas'], ['/admin/banco', 'Banco de dados']];
-  let memoryToken = '';
+  const NAV = [['/admin', 'Início'], ['/admin/responsaveis', 'Responsáveis'], ['/admin/avisos', 'Avisos'], ['/admin/frequencia', 'Frequência'], ['/admin/notas', 'Notas'], ['/admin/banco', 'Banco de dados']];
   let school = '';
-
-  // sessionStorage keeps the token across pages until the tab closes; it can be unavailable.
-  const readToken = () => { try { return sessionStorage.getItem(TOKEN_KEY) || memoryToken; } catch { return memoryToken; } };
-  const writeToken = value => { memoryToken = value; try { value ? sessionStorage.setItem(TOKEN_KEY, value) : sessionStorage.removeItem(TOKEN_KEY); } catch { /* memory only */ } };
 
   function el(tag, props = {}, ...children) {
     const node = document.createElement(tag);
@@ -21,10 +15,8 @@ const Apolo = (() => {
   }
 
   async function api(path, method = 'GET', body) {
-    const headers = { Authorization: `Bearer ${readToken()}` };
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const headers = body === undefined ? {} : { 'Content-Type': 'application/json' };
     const response = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (response.status === 401) { writeToken(''); location.reload(); throw new Error('Token inválido'); }
     const data = await response.json().catch(() => ({}));
     if (!response.ok) {
       const { detail } = data;
@@ -51,28 +43,6 @@ const Apolo = (() => {
     toastTimer = setTimeout(() => node.remove(), 3500);
   }
 
-  function signIn() {
-    return new Promise(resolve => {
-      const input = el('input', { type: 'password', required: true, autocomplete: 'current-password', id: 'signin-token' });
-      const error = el('div', { class: 'error', role: 'alert' });
-      const form = el('form', {
-        onsubmit: async event => {
-          event.preventDefault();
-          const response = await fetch('/admin/tables', { headers: { Authorization: `Bearer ${input.value}` } });
-          if (!response.ok) { error.textContent = 'Token inválido.'; input.select(); return; }
-          writeToken(input.value);
-          dialog.close();
-          dialog.remove();
-          resolve();
-        },
-      }, el('h2', {}, 'Entrar no painel'), el('label', { htmlFor: 'signin-token' }, 'Token de acesso', input), error,
-      el('div', { class: 'dialog-actions' }, el('button', { type: 'submit', class: 'primary' }, 'Entrar')));
-      const dialog = el('dialog', { oncancel: event => event.preventDefault() }, form);
-      document.body.append(dialog);
-      dialog.showModal();
-    });
-  }
-
   function renderTopbar(schools) {
     const links = NAV.map(([path, label]) => {
       const link = el('a', { href: href(path) }, label);
@@ -86,13 +56,11 @@ const Apolo = (() => {
     document.body.prepend(el('header', { class: 'topbar' }, el('a', { class: 'brand', href: href('/admin') }, 'Apolo'), el('nav', { 'aria-label': 'Principal' }, ...links), schools.length > 1 ? picker : null));
   }
 
-  // Resolves once the user is signed in and the school is known.
+  // Resolves once the school is known.
   async function start() {
     const schools = await fetch('/schools').then(response => response.json());
     const wanted = new URLSearchParams(location.search).get('school');
     school = schools.some(item => item.id === wanted) ? wanted : schools[0].id;
-    const check = readToken() ? await fetch('/admin/tables', { headers: { Authorization: `Bearer ${readToken()}` } }) : null;
-    if (!check?.ok) { writeToken(''); await signIn(); }
     renderTopbar(schools);
     return school;
   }

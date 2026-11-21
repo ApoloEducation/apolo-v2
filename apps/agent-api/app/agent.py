@@ -177,6 +177,9 @@ def _validate(ctx: RunContext[Deps], text: str) -> str:
         elif "format" not in deps.nudged:
             deps.nudged.add("format")
             raise ModelRetry(NUDGES["invalid_format"])
+    if "fake-tool" not in deps.nudged and ("run_sql" in text or "```" in text):
+        deps.nudged.add("fake-tool")  # some models write the tool call as text instead of calling it
+        raise ModelRetry(NUDGES.get("tool_as_text", "Não escreva a chamada da ferramenta como texto: chame run_sql de verdade, ou responda em texto simples."))
     if "cut" not in deps.nudged and "ESCALAR" not in text.upper() and not COMPLETE.search(text):
         deps.nudged.add("cut")  # providers sometimes cut a reply mid-word ("A Bianca est"); ask once for the whole sentence
         raise ModelRetry(NUDGES.get("incomplete", "Resposta incompleta. Escreva a resposta inteira, terminando a frase."))

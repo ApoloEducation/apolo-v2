@@ -1,12 +1,10 @@
-import hmac
-import os
-
-from fastapi import APIRouter, Body, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import APIRouter, Body, FastAPI, HTTPException, Query
 
 from .guardian_sql import SCHEMA_DOC, QueryRejected, run_guardian_query
 from .database import UnknownSchool, active_school, connection, rows
 from .admin_schema import TABLES, describe, references_to, validate
 from .admin_tools import pages as admin_pages, tools as admin_tools
+from .phone import normalize, variants
 from .seed import seed_all, served_schools
 
 
@@ -48,6 +46,33 @@ def guardians(school_id: str):
         for guardian in result:
             guardian["students"] = [row["name"] for row in rows(conn, "SELECT name FROM students WHERE guardian_id=? ORDER BY id", (guardian["id"],))]
         return result
+
+
+@app.get("/lookup/phone/{number}")
+def lookup_phone(number: str):
+    """Who owns this WhatsApp number? Used by the agent to identify the sender (the number is as Meta reports it)."""
+    try:
+        wanted = sorted(variants(normalize(number, assume_brazil=False)))
+    except ValueError:
+        raise HTTPException(404, "Telefone não cadastrado")
+    for school_id in served_schools():
+        try:
+            with connection(school_id) as conn:
+                row = conn.execute(f"SELECT id, name FROM guardians WHERE phone IN ({','.join('?' * len(wanted))})", wanted).fetchone()
+        except UnknownSchool:
+            continue
+        if row:
+            return {"school_id": school_id, "guardian_id": row["id"], "name": row["name"]}
+    raise HTTPException(404, "Telefone não cadastrado")
+
+
+@app.get("/schools/{school_id}/guardians/{guardian_id}/phone")
+def guardian_phone(school_id: str, guardian_id: str):
+    with connection(school_id) as conn:
+        row = conn.execute("SELECT phone FROM guardians WHERE id = ?", (guardian_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Responsável não encontrado")
+        return {"phone": row["phone"]}
 
 
 @app.get("/schools/{school_id}/student-names")
@@ -116,18 +141,11 @@ def legacy_stats():
     return stats(default_school())
 
 
-# Read-only admin UI. Disabled (404) unless ADMIN_TOKEN is set.
-def require_admin(authorization: str = Header(default="")):
-    token = os.getenv("ADMIN_TOKEN", "")
-    supplied = authorization.removeprefix("Bearer ").strip()
-    if not token or not hmac.compare_digest(supplied.encode(), token.encode()):
-        raise HTTPException(404 if not token else 401, "Not found" if not token else "Token inválido")
-
-
+# School panel (/admin). No sign-in: the port is published on 127.0.0.1 only (docker-compose.yml), so only this machine reaches it.
 admin = APIRouter(prefix="/admin")
 
 
-@admin.get("/schools/{school_id}/tables/{table}", dependencies=[Depends(require_admin)])
+@admin.get("/schools/{school_id}/tables/{table}")
 def admin_table(school_id: str, table: str, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=200)):
     if table not in ADMIN_TABLES:  # allow-list: the name is interpolated into SQL
         raise HTTPException(404, "Tabela não encontrada")
@@ -137,12 +155,12 @@ def admin_table(school_id: str, table: str, offset: int = Query(0, ge=0), limit:
     return {"table": table, "total": total, "offset": offset, "limit": limit, "rows": data}
 
 
-@admin.get("/tables", dependencies=[Depends(require_admin)])
+@admin.get("/tables")
 def admin_tables():
     return list(ADMIN_TABLES)
 
 
-@admin.get("/schema", dependencies=[Depends(require_admin)])
+@admin.get("/schema")
 def admin_schema():
     return describe()
 
@@ -151,7 +169,7 @@ def _write_error(exc: ValueError):
     return HTTPException(422, str(exc))
 
 
-@admin.post("/schools/{school_id}/tables/{table}", status_code=201, dependencies=[Depends(require_admin)])
+@admin.post("/schools/{school_id}/tables/{table}", status_code=201)
 def admin_create(school_id: str, table: str, data: dict = Body(...)):
     if table not in TABLES or not TABLES[table].get("create", True):
         raise HTTPException(404, "Tabela não encontrada")
@@ -171,7 +189,7 @@ def _existing(conn, table: str, rowid: int):
     return dict(row)
 
 
-@admin.put("/schools/{school_id}/tables/{table}/{rowid}", dependencies=[Depends(require_admin)])
+@admin.put("/schools/{school_id}/tables/{table}/{rowid}")
 def admin_update(school_id: str, table: str, rowid: int, data: dict = Body(...)):
     if table not in TABLES:
         raise HTTPException(404, "Tabela não encontrada")
@@ -192,7 +210,7 @@ def admin_update(school_id: str, table: str, rowid: int, data: dict = Body(...))
         return {"_rowid": rowid, **clean}
 
 
-@admin.delete("/schools/{school_id}/tables/{table}/{rowid}", dependencies=[Depends(require_admin)])
+@admin.delete("/schools/{school_id}/tables/{table}/{rowid}")
 def admin_delete(school_id: str, table: str, rowid: int):
     if table not in TABLES or not TABLES[table].get("delete", True):
         raise HTTPException(404, "Tabela não encontrada")
@@ -209,4 +227,4 @@ def admin_delete(school_id: str, table: str, rowid: int):
 
 app.include_router(admin)
 app.include_router(admin_pages, prefix="/admin")
-app.include_router(admin_tools, prefix="/admin", dependencies=[Depends(require_admin)])
+app.include_router(admin_tools, prefix="/admin")

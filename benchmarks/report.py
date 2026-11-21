@@ -120,7 +120,8 @@ def case_index(runs: list[dict]) -> dict[str, dict]:
 
 
 def setup_key(setup: dict) -> tuple:
-    return (setup["chat_model"], setup["classifier"], setup["agent_prompt_version"], setup["classifier_prompt_version"], setup.get("threshold"))
+    return (setup["chat_model"], setup["classifier"], setup["agent_prompt_version"], setup["classifier_prompt_version"], setup.get("threshold"),
+            setup["case_set"])
 
 
 def group(runs: list[dict]) -> list[dict]:
@@ -171,11 +172,18 @@ def count_pill(count: float, label: str = "") -> str:
     return f'<span class="pill {"ok" if count == 0 else "ko"}">{"✓" if count == 0 else "✕"} {text}{label}</span>'
 
 
-def leaderboard(groups: list[dict]) -> str:
+def older_cases(g: dict, current: str | None) -> bool:
+    return g["setup"]["case_set"] != current
+
+
+def leaderboard(groups: list[dict], current: str | None = None) -> str:
     rows = []
     for g in groups:
         spread = f'{pct(g["min"])} – {pct(g["max"])}' if g["n"] > 1 and g["min"] != g["max"] else "same every run" if g["n"] > 1 else "single run"
-        rows.append(f'<tr>{model_cell(g["setup"])}<td>{bar(g["mean"])}<div class="sub">{spread}</div></td>'
+        cell = model_cell(g["setup"])
+        if older_cases(g, current):
+            cell = cell.replace("</td>", f'<div class="sub">earlier version of the cases ({esc(g["setup"]["case_set"])}) · {esc(g["setup"]["date"])}</div></td>')
+        rows.append(f'<tr>{cell}<td>{bar(g["mean"])}<div class="sub">{spread}</div></td>'
                     f'<td class="n">{g["perfect"]} of {g["n"]}</td>'
                     f'<td class="n">{pill(g["answer"])}</td><td class="n">{pill(g["escalate"])}</td><td class="n">{pill(g["decline"])}</td>'
                     f'<td class="n">{count_pill(g["leaks"])}</td><td class="n">{g["needless"]:.1f}</td><td class="n">{g["wrong"]:.1f}</td>'
@@ -186,10 +194,11 @@ def leaderboard(groups: list[dict]) -> str:
     return f'<div class="card"><table>{head}{"".join(rows)}</table></div>'
 
 
-def area_table(groups: list[dict], index: dict) -> str:
+def area_table(groups: list[dict], index: dict, current: str | None = None) -> str:
     areas = [a for a in AREAS if any(c["area"] == a for c in index.values())] + sorted({c["area"] for c in index.values()} - set(AREAS))
     head = "<tr><th>Area</th><th class=n>Cases</th>" + "".join(
-        f'<th>{esc(g["setup"]["chat_model"].split("/")[-1])}<br>+ {esc(g["setup"]["classifier"].split("/")[-1])}</th>' for g in groups) + "</tr>"
+        f'<th>{esc(g["setup"]["chat_model"].split("/")[-1])}<br>+ {esc(g["setup"]["classifier"].split("/")[-1])}'
+        f'<br>prompt v{esc(g["setup"]["agent_prompt_version"])}{" · earlier cases" if older_cases(g, current) else ""}</th>' for g in groups) + "</tr>"
     rows = []
     for area in areas:
         ids = [case_id for case_id, c in index.items() if c["area"] == area]
@@ -206,11 +215,12 @@ def area_table(groups: list[dict], index: dict) -> str:
     return f'<div class="card areas"><table>{head}{"".join(rows)}</table></div>'
 
 
-def failure_details(groups: list[dict], index: dict) -> str:
+def failure_details(groups: list[dict], index: dict, current: str | None = None) -> str:
     blocks = []
     for g in groups:
         setup = g["setup"]
-        title = f'{esc(setup["chat_model"])} + {esc(setup["classifier"])}'
+        title = (f'{esc(setup["chat_model"])} + {esc(setup["classifier"])} · prompt v{esc(setup["agent_prompt_version"])}'
+                 f'{" · earlier cases" if older_cases(g, current) else ""}')
         if not g["fails"]:
             blocks.append(f'<details><summary>{title} · no failures in {g["n"]} run{"s" if g["n"] > 1 else ""}</summary></details>')
             continue
@@ -262,7 +272,9 @@ def build() -> Path:
     runs = [run for run in history if "legacy" not in run]
     full = [run for run in runs if run["setup"]["mode"] == "full"]
     current = full[-1]["setup"]["case_set"] if full else None
-    now = [run for run in full if run["setup"]["case_set"] == current]
+    # Every full run on a case set of the same size is kept, so new runs are added to the table instead of replacing it.
+    family = lambda run: run["setup"]["case_set"].split("-")[0]  # noqa: E731
+    now = [run for run in full if current and family(run) == current.split("-")[0]]
     classifier_now = [run for run in runs if run["setup"]["mode"] == "classifier-only" and run["setup"]["case_set"].split("-")[0] == (current or "").split("-")[0]]
     if classifier_now:  # classifier-only runs skip the cases decided by code, so compare only the newest of their own sets
         newest = classifier_now[-1]["setup"]["case_set"]
@@ -280,15 +292,15 @@ def build() -> Path:
                      f'<div class="tile"><b>{pct(best["mean"])}</b><span>best setup: {esc(best["setup"]["chat_model"])} + {esc(best["setup"]["classifier"])}</span></div>'
                      f'<div class="tile"><b>{len(consistent)}</b><span>setups at 100% on every run (2+ runs)</span></div>'
                      f'<div class="tile"><b>{len(now)}</b><span>full runs across {len(groups)} setups</span></div></div>')
-        parts.append("<h2>Which setup is best</h2><p>One row per chat model + classifier + prompt version, best first (ranked by its worst run). "
+        parts.append("<h2>Which setup is best</h2><p>One row per chat model + classifier + prompt version + version of the cases, best first (ranked by its worst run). Every full run on a case set of the same size stays here, so new runs are added to the comparison. "
                      "Answers, hand-offs and refusals are the share of cases of each kind that passed. A leak is a message that had to be blocked but was answered.</p>")
-        parts.append(leaderboard(groups))
+        parts.append(leaderboard(groups, current))
         parts.append('<div class="legend"><span class="pill ok">✓</span> all passed &nbsp; <span class="pill mid">!</span> 95% or more &nbsp; <span class="pill ko">✕</span> below 95%</div>')
         if index:
             parts.append("<h2>Where each setup fails</h2><p>Share of cases passed per area, over all runs of the setup. Hover the ? for what an area covers and an example message.</p>")
-            parts.append(area_table(groups, index))
+            parts.append(area_table(groups, index, current))
         parts.append("<h2>What failed</h2><p>Every case that failed at least once, per setup. Full replies and SQL are in <code>benchmarks/results/</code>.</p>")
-        parts.append(failure_details(groups, index))
+        parts.append(failure_details(groups, index, current))
     if classifier_now:
         parts.append("<h2>Classifier on its own</h2><p>Only the decision model is called (no chat model). It is right when its action fits the case: "
                      "answerable messages go through, sensitive ones go to a human, injection and off-topic are refused.</p>")

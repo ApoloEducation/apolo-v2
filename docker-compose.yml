@@ -87,9 +87,8 @@ services:
     environment:
       SCHOOL_DB_DIR: /data/schools
       ACTIVE_SCHOOL: ${APOLO_SCHOOL:-}
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
     ports:
-      - "127.0.0.1:8001:8000"
+      - "127.0.0.1:8001:8000"  # local-only on purpose: the school panel (/admin) has no sign-in
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 5s
@@ -101,7 +100,7 @@ services:
     environment:
       SCHOOL_DATA_URL: http://school-data:8000
       APOLO_CONFIG_DIR: /app/configs  # model prompts; ./configs is mounted below, so edits need only a restart
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:${MESSENGER_PORT:-5173},http://127.0.0.1:${MESSENGER_PORT:-5173}}
       OLLAMA_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
@@ -144,7 +143,7 @@ services:
       agent-api:
         condition: service_healthy
     ports:
-      - "5173:80"
+      - "${MESSENGER_PORT:-5173}:80"  # scripts/start.sh moves it off 5173 when another program holds that port
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 5s

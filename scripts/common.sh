@@ -41,3 +41,9 @@ compose_projects() {
 }
 
 ollama_up() { curl -sf -m 2 http://127.0.0.1:11434/api/tags; }
+
+# True when some process listens on TCP port $1 (IPv4 or IPv6; a dev server bound only to ::1 counts too).
+port_in_use() {
+  if command -v lsof >/dev/null && lsof -nP -iTCP:"$1" -sTCP:LISTEN >/dev/null 2>&1; then return 0; fi
+  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null || (exec 3<>"/dev/tcp/::1/$1") 2>/dev/null
+}

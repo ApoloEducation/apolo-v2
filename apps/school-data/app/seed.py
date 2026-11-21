@@ -59,7 +59,7 @@ def seed_database(school_id: str) -> None:
         CREATE TABLE IF NOT EXISTS school (id TEXT PRIMARY KEY, name TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS teachers (id TEXT PRIMARY KEY, name TEXT NOT NULL, subject TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS classes (id TEXT PRIMARY KEY, name TEXT NOT NULL, shift TEXT NOT NULL, homeroom_teacher_id TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS guardians (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS guardians (id TEXT PRIMARY KEY, name TEXT NOT NULL, phone TEXT);
         CREATE TABLE IF NOT EXISTS students (id TEXT PRIMARY KEY, name TEXT NOT NULL, class_id TEXT NOT NULL, guardian_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS grades (student_id TEXT NOT NULL, subject TEXT NOT NULL, term TEXT NOT NULL, score REAL NOT NULL);
         CREATE TABLE IF NOT EXISTS attendance (student_id TEXT PRIMARY KEY, present_days INTEGER NOT NULL, school_days INTEGER NOT NULL);
@@ -67,6 +67,8 @@ def seed_database(school_id: str) -> None:
         CREATE TABLE IF NOT EXISTS schedule (class_id TEXT NOT NULL, weekday TEXT NOT NULL, time TEXT NOT NULL, subject TEXT NOT NULL, teacher_id TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS notices (id INTEGER PRIMARY KEY, class_id TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, date TEXT NOT NULL);
         """)
+        if "phone" not in {row["name"] for row in conn.execute("PRAGMA table_info(guardians)")}:
+            conn.execute("ALTER TABLE guardians ADD COLUMN phone TEXT")  # databases created before WhatsApp identification
         if conn.execute("SELECT COUNT(*) FROM students").fetchone()[0]:
             # Databases seeded before guardians had real names still hold "Responsável de <aluno>".
             for i, name in enumerate(spec["guardians"], 1):
@@ -76,7 +78,7 @@ def seed_database(school_id: str) -> None:
         conn.executemany("INSERT INTO teachers VALUES (?, ?, ?)", spec["teachers"])
         conn.executemany("INSERT INTO classes VALUES (?, ?, ?, ?)", spec["classes"])
         guardians = [(f"g{i:02}", name) for i, name in enumerate(spec["guardians"], 1)]
-        conn.executemany("INSERT INTO guardians VALUES (?, ?)", guardians)
+        conn.executemany("INSERT INTO guardians (id, name) VALUES (?, ?)", guardians)
         conn.executemany("INSERT INTO students VALUES (?, ?, ?, ?)", [(sid, name, cls, g[0]) for (sid, name, cls), g in zip(students, guardians)])
         grades = []
         for position, (student_id, _, _) in enumerate(students):

@@ -1,7 +1,7 @@
 # Apolo School MVP: macOS/Linux entry point.
 # Commands live in ./scripts. Run `make` or `make help` to list them.
 .DEFAULT_GOAL := help
-.PHONY: help tunnel start stop restart reset logs ps test prompt benchmark benchmark-mock
+.PHONY: help tunnel start start-plain stop restart reset logs ps test prompt benchmark benchmark-mock
 
 help: ## Show this help
 	@awk 'BEGIN {FS = ":.*## "} /^[a-z-]+:.*## / {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -11,7 +11,10 @@ tunnel: ## Expose agent-api (8000) via a Cloudflare quick tunnel for the WhatsAp
 	@echo "Meta callback URL: https://<host>.trycloudflare.com/webhooks/whatsapp (the host is printed below and changes on every run)"
 	cloudflared tunnel --url http://localhost:8000
 
-start: ## Ask which school to run, then start everything for it (SCHOOL=<id> skips the menu, LLM=openrouter uses OpenRouter, NO_BROWSER=1 skips tabs)
+start: ## Guided start: pick a school, start everything on OpenRouter, open the tunnel and walk through the Meta/Chatwoot/panel/iPhone Mirroring steps (SCHOOL=<id> skips the menu, LLM=ollama for local)
+	@scripts/start_tui.sh
+
+start-plain: ## The old non-interactive start (no tunnel, no guide): SCHOOL=<id>, LLM=openrouter, NO_BROWSER=1
 	@scripts/start.sh
 
 stop: ## Stop every school; data is kept

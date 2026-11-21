@@ -7,16 +7,18 @@ import re
 import sqlite3
 from datetime import date
 
+from .phone import normalize, variants
+
 SHIFTS = ["Manhã", "Tarde", "Noite"]
 WEEKDAYS = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira"]
 ID = r"[A-Za-z0-9][A-Za-z0-9_-]{0,15}"
 
-# kind: id | text | int | float | enum | time | date ; ref=(table, column) is a foreign key.
+# kind: id | text | int | float | enum | time | date | phone (optional, digits with country code) ; ref=(table, column) is a foreign key.
 TABLES = {
     "school": {"fields": [("id", "id"), ("name", "text")], "create": False, "delete": False},
     "teachers": {"fields": [("id", "id"), ("name", "text"), ("subject", "text")]},
     "classes": {"fields": [("id", "id"), ("name", "text"), ("shift", "enum", SHIFTS), ("homeroom_teacher_id", "ref", ("teachers", "id"))]},
-    "guardians": {"fields": [("id", "id"), ("name", "text")]},
+    "guardians": {"fields": [("id", "id"), ("name", "text"), ("phone", "phone")]},
     "students": {"fields": [("id", "id"), ("name", "text"), ("class_id", "ref", ("classes", "id")), ("guardian_id", "ref", ("guardians", "id"))]},
     "grades": {"fields": [("student_id", "ref", ("students", "id")), ("subject", "text"), ("term", "text"), ("score", "float", (0, 10))]},
     "attendance": {"fields": [("student_id", "ref", ("students", "id")), ("present_days", "int", (0, 366)), ("school_days", "int", (1, 366))], "unique": ["student_id"]},
@@ -41,6 +43,15 @@ def describe() -> dict:
 
 def _clean(field, raw, conn: sqlite3.Connection):
     name, kind, *extra = field
+    if kind == "phone":  # the only optional kind: empty means "no WhatsApp registered"
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            return None
+        if not isinstance(raw, str):
+            raise ValueError(f"'{name}' deve ser texto")
+        try:
+            return normalize(raw)
+        except ValueError as exc:
+            raise ValueError(f"'{name}': {exc}") from None
     if raw is None or (isinstance(raw, str) and not raw.strip()):
         raise ValueError(f"'{name}' é obrigatório")
     if kind in ("id", "ref", "text", "enum", "time", "date"):
@@ -100,6 +111,11 @@ def validate(conn: sqlite3.Connection, table: str, data: dict, current_rowid: in
         clash = conn.execute(f"SELECT rowid FROM {table} WHERE {key}=? AND rowid IS NOT ?", (clean[key], current_rowid)).fetchone()
         if clash:
             raise ValueError(f"Já existe um registro com {key} '{clean[key]}'")
+    if clean.get("phone"):  # one WhatsApp number identifies one guardian, in either Brazilian form
+        found = variants(clean["phone"])
+        clash = conn.execute(f"SELECT name FROM {table} WHERE phone IN ({','.join('?' * len(found))}) AND rowid IS NOT ?", (*found, current_rowid)).fetchone()
+        if clash:
+            raise ValueError(f"Este telefone já está cadastrado para {clash[0]}")
     if table == "attendance" and clean["present_days"] > clean["school_days"]:
         raise ValueError("'present_days' não pode ser maior que 'school_days'")
     return clean

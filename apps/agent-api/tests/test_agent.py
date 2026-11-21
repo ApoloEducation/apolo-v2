@@ -303,3 +303,9 @@ async def test_misconfigured_model_fails_closed(monkeypatch):
     with pytest.raises(Escalate) as raised:
         await answer("horizonte", "g01", "nota?")
     assert raised.value.theme == "erro-agente"
+
+
+@pytest.mark.anyio
+async def test_tool_call_written_as_text_gets_one_nudge(monkeypatch):
+    Script(["```sql\nSELECT 1\n``` run_sql", sql("SELECT score FROM grades"), "A nota é 8,0."]).install(monkeypatch)
+    assert (await answer("horizonte", "g01", "qual a nota?")).text == "A nota é 8,0."

@@ -5,7 +5,6 @@ from datetime import date, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-AUTH = {"Authorization": "Bearer secret"}
 BASE = "/admin/schools/horizonte"
 DAY = "2026-10-05"
 
@@ -14,9 +13,8 @@ DAY = "2026-10-05"
 def client(monkeypatch):
     with tempfile.TemporaryDirectory() as directory:
         monkeypatch.setenv("SCHOOL_DB_DIR", directory)
-        monkeypatch.setenv("ADMIN_TOKEN", "secret")
         from app.main import app
-        with TestClient(app, headers=AUTH) as test_client:
+        with TestClient(app) as test_client:
             yield test_client
 
 
@@ -31,24 +29,10 @@ def test_pages_served(client, path, marker):
     assert page.headers["cache-control"] == "no-cache"
 
 
-def test_pages_hidden_without_token(client, monkeypatch):
-    monkeypatch.delenv("ADMIN_TOKEN")
-    for path in ("/admin", "/admin/avisos", "/admin/assets/common.js"):
-        assert client.get(path).status_code == 404
-
-
-@pytest.mark.parametrize("method,path", [
-    ("get", f"{BASE}/overview?date={DAY}"), ("get", f"{BASE}/options"), ("get", f"{BASE}/notices"), ("post", f"{BASE}/notices"),
-    ("post", f"{BASE}/notices/delete"), ("get", f"{BASE}/attendance?class_id=6A&date={DAY}"), ("post", f"{BASE}/attendance"),
-    ("get", f"{BASE}/gradebook?class_id=6A&subject=x&term=y"), ("post", f"{BASE}/gradebook"),
-])
-def test_tools_require_token(client, method, path):
-    assert getattr(client, method)(path, headers={"Authorization": "Bearer wrong"}).status_code == 401
-
-
 def test_overview(client):
     data = client.get(f"{BASE}/overview", params={"date": DAY}).json()
-    assert data == {"school": "Escola Horizonte", "students": 12, "classes": 3, "teachers": 3, "notices": 3, "attendance_done": 0}
+    assert data == {"school": "Escola Horizonte", "students": 12, "classes": 3, "teachers": 3, "notices": 3, "attendance_done": 0,
+                    "guardians": 12, "guardians_with_phone": 0}
     client.post(f"{BASE}/attendance", json={"class_id": "6A", "date": DAY})
     assert client.get(f"{BASE}/overview", params={"date": DAY}).json()["attendance_done"] == 1
 
@@ -212,3 +196,71 @@ def test_existing_database_gains_log_table(client, monkeypatch):
         conn.execute("DROP TABLE attendance_log")
     seed_database("horizonte")
     assert client.post(f"{BASE}/attendance", json={"class_id": "6A", "date": DAY}).status_code == 200
+
+
+# --- Guardian registry: the phone number that identifies a WhatsApp sender
+DIRECTORY = f"{BASE}/guardian-directory"
+
+
+def test_guardians_page_served(client):
+    assert "Cadastrar responsável" in client.get("/admin/responsaveis").text
+
+
+def test_register_guardian_with_phone_and_children(client):
+    created = client.post(DIRECTORY, json={"name": "Luís Teste", "phone": "(37) 99924-2395", "student_ids": ["s01", "s02"]})
+    assert created.status_code == 201
+    new_id = created.json()["id"]
+    listing = client.get(DIRECTORY).json()
+    guardian = next(g for g in listing["guardians"] if g["id"] == new_id)
+    assert guardian["phone"] == "5537999242395"
+    assert [s["id"] for s in guardian["students"]] == ["s01", "s02"]
+    # the children moved: the previous owner no longer sees them
+    assert next(g for g in listing["guardians"] if g["id"] == "g01")["students"] == []
+    # and the agent's context for the new guardian is those children
+    context = client.get(f"/schools/horizonte/guardians/{new_id}/context").json()
+    assert {s["name"] for s in context["students"]} == {"Lucas Almeida", "Marina Ribeiro"}
+
+
+def test_lookup_by_phone_accepts_both_brazilian_forms(client):
+    client.post(DIRECTORY, json={"name": "Luís Teste", "phone": "+55 37 99924-2395", "student_ids": ["s01"]})
+    for number in ("5537999242395", "553799242395"):  # Meta may report the number without the extra 9
+        found = client.get(f"/lookup/phone/{number}")
+        assert found.status_code == 200 and found.json()["name"] == "Luís Teste" and found.json()["school_id"] == "horizonte"
+    assert client.get("/lookup/phone/5511900000000").status_code == 404
+    assert client.get("/lookup/phone/abc").status_code == 404
+    assert client.get(f"/schools/horizonte/guardians/{found.json()['guardian_id']}/phone").json() == {"phone": "5537999242395"}
+
+
+def test_phone_must_be_valid_and_unique(client):
+    assert client.post(DIRECTORY, json={"name": "A", "phone": "123"}).status_code == 422
+    assert client.post(DIRECTORY, json={"name": "", "phone": "37999242395"}).status_code == 422
+    assert client.post(DIRECTORY, json={"name": "A", "phone": "37999242395"}).status_code == 201
+    clash = client.post(DIRECTORY, json={"name": "B", "phone": "+55 (37) 9924-2395"})  # same number without the extra 9
+    assert clash.status_code == 422 and "já está cadastrado" in clash.json()["detail"]
+    assert client.post(DIRECTORY, json={"name": "C", "phone": "", "student_ids": ["nope"]}).status_code == 422
+
+
+def test_update_and_delete_guardian(client):
+    guardian_id = client.post(DIRECTORY, json={"name": "A", "phone": "37999242395"}).json()["id"]
+    assert client.put(f"{DIRECTORY}/{guardian_id}", json={"name": "A2", "phone": "37999242395"}).status_code == 200  # keeps own number
+    assert client.put(f"{DIRECTORY}/g99", json={"name": "X"}).status_code == 404
+    assert client.delete(f"{DIRECTORY}/g01").status_code == 409  # still has a child
+    assert client.delete(f"{DIRECTORY}/{guardian_id}").status_code == 200
+
+
+def test_phone_is_not_visible_to_the_agents_sql(client):
+    client.post(DIRECTORY, json={"name": "A", "phone": "37999242395", "student_ids": ["s01"]})
+    guardian_id = next(g["id"] for g in client.get(DIRECTORY).json()["guardians"] if g["phone"])
+    for sql in ("SELECT phone FROM guardians", "SELECT * FROM main.guardians"):
+        assert client.post(f"/schools/horizonte/guardians/{guardian_id}/query", json={"sql": sql}).status_code == 400
+
+
+def test_existing_database_gets_the_phone_column(client, monkeypatch):
+    import os
+    path = os.path.join(os.environ["SCHOOL_DB_DIR"], "horizonte.sqlite3")
+    conn = sqlite3.connect(path)
+    conn.execute("ALTER TABLE guardians DROP COLUMN phone")
+    conn.commit(); conn.close()
+    from app.seed import seed_database
+    seed_database("horizonte")
+    assert "phone" in {r[1] for r in sqlite3.connect(path).execute("PRAGMA table_info(guardians)")}

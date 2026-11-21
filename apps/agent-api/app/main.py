@@ -159,7 +159,7 @@ def whatsapp_verify(request: Request):
 
 async def process_whatsapp_message(msg: dict):
     sender = msg.get("from", "")
-    target = whatsapp.allowed_numbers().get(sender)
+    target = await whatsapp.resolve_sender(sender)
     if not target:
         log.info("Ignoring WhatsApp message from unmapped number")
         return
@@ -190,6 +190,11 @@ async def whatsapp_webhook(request: Request, background: BackgroundTasks):
         raise HTTPException(400, "Invalid JSON")
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
+            # Sends are accepted synchronously but can fail later (e.g. 131047: outside the 24 h window); Meta reports it here.
+            for status in (change.get("value") or {}).get("statuses", []):
+                if status.get("status") == "failed":
+                    error = (status.get("errors") or [{}])[0]
+                    log.warning("WhatsApp delivery failed (%s): %s", error.get("code"), (error.get("error_data") or {}).get("details") or error.get("title"))
             for msg in (change.get("value") or {}).get("messages", []):
                 if msg.get("id") and claim_wamid(msg["id"]):
                     background.add_task(process_whatsapp_message, msg)
@@ -215,7 +220,7 @@ async def chatwoot_webhook(payload: dict):
             mark_local_delivery(payload.get("id"))  # also makes webhook retries idempotent
             save_message(row["school_id"], row["guardian_id"], "human", content)
             await broadcast(key(row["school_id"], row["guardian_id"]), {"sender": "human", "content": content})
-            number = whatsapp.number_for(row["school_id"], row["guardian_id"])
+            number = await whatsapp.number_of(row["school_id"], row["guardian_id"])
             if number and content:
                 await whatsapp.send_text(number, content)
     return {"ok": True}

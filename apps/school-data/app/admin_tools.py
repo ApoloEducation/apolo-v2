@@ -4,20 +4,19 @@ The agent only reads the `attendance` totals. Daily roll calls live in `attendan
 not exposed to guardian SQL; saving a day adjusts the totals by the difference, so re-saving a date
 corrects it instead of counting it twice.
 """
-import os
 from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from pydantic import BaseModel
 
-from .admin_schema import validate
+from .admin_schema import references_to, validate
 from .database import connection, rows
 
 UI_DIR = Path(__file__).parent / "admin_ui"
 DEFAULT_TERMS = ["1º bimestre", "2º bimestre", "3º bimestre", "4º bimestre"]
 
-PAGES = {"": "home.html", "/avisos": "avisos.html", "/frequencia": "frequencia.html", "/notas": "notas.html", "/banco": "banco.html"}
+PAGES = {"": "home.html", "/responsaveis": "responsaveis.html", "/avisos": "avisos.html", "/frequencia": "frequencia.html", "/notas": "notas.html", "/banco": "banco.html"}
 ASSETS = {"common.js": "text/javascript", "common.css": "text/css"}
 
 pages = APIRouter(include_in_schema=False)
@@ -31,8 +30,6 @@ def _serve(name: str, media_type: str) -> Response:
 
 def _page_route(path: str, name: str) -> None:
     def page():
-        if not os.getenv("ADMIN_TOKEN"):
-            raise HTTPException(404, "Not found")
         return _serve(name, "text/html; charset=utf-8")
     pages.add_api_route(path, page, methods=["GET"], name=f"admin_page_{name}")
 
@@ -43,7 +40,7 @@ for _path, _name in PAGES.items():
 
 @pages.get("/assets/{name}")
 def asset(name: str):
-    if not os.getenv("ADMIN_TOKEN") or name not in ASSETS:
+    if name not in ASSETS:
         raise HTTPException(404, "Not found")
     return _serve(name, f"{ASSETS[name]}; charset=utf-8")
 
@@ -86,6 +83,7 @@ def overview(school_id: str, day: str = Query(..., alias="date")):
             "school": conn.execute("SELECT name FROM school").fetchone()["name"],
             "students": count("students"), "classes": count("classes"), "teachers": count("teachers"),
             "notices": len(_grouped_notices(conn)), "attendance_done": done,
+            "guardians": count("guardians"), "guardians_with_phone": conn.execute("SELECT COUNT(*) FROM guardians WHERE phone IS NOT NULL").fetchone()[0],
         }
 
 
@@ -99,6 +97,74 @@ def options(school_id: str):
             "subjects": [r["subject"] for r in subjects],
             "terms": DEFAULT_TERMS + [t for t in terms if t not in DEFAULT_TERMS],
         }
+
+
+# --- Guardians and their WhatsApp numbers. The number is how the agent knows who is writing, so it picks whose children to answer about.
+class GuardianIn(BaseModel):
+    name: str
+    phone: str = ""
+    student_ids: list[str] = []  # these students now belong to this guardian (a student has exactly one)
+
+
+def _directory(conn) -> dict:
+    students = rows(conn, "SELECT s.id, s.name, s.guardian_id, c.name AS class_name FROM students s JOIN classes c ON c.id = s.class_id ORDER BY s.name")
+    guardians = rows(conn, "SELECT id, name, phone FROM guardians ORDER BY name")
+    for guardian in guardians:
+        guardian["students"] = [s for s in students if s["guardian_id"] == guardian["id"]]
+    return {"guardians": guardians, "students": students}
+
+
+def _assign_students(conn, guardian_id: str, student_ids: list[str]) -> None:
+    for student_id in dict.fromkeys(student_ids):
+        if not conn.execute("UPDATE students SET guardian_id=? WHERE id=?", (guardian_id, student_id)).rowcount:
+            raise HTTPException(422, f"Aluno '{student_id}' não existe")
+
+
+@tools.get("/guardian-directory")
+def guardian_directory(school_id: str):
+    with connection(school_id) as conn:
+        return _directory(conn)
+
+
+@tools.post("/guardian-directory", status_code=201)
+def create_guardian(school_id: str, guardian: GuardianIn):
+    with connection(school_id) as conn:
+        _begin_write(conn)
+        taken = [int(r["id"][1:]) for r in rows(conn, "SELECT id FROM guardians") if r["id"][1:].isdigit()]
+        guardian_id = f"g{max(taken, default=0) + 1:02}"
+        clean = _clean_or_422(conn, "guardians", {"id": guardian_id, "name": guardian.name, "phone": guardian.phone})
+        conn.execute("INSERT INTO guardians (id, name, phone) VALUES (:id, :name, :phone)", clean)
+        _assign_students(conn, guardian_id, guardian.student_ids)
+        return {"id": guardian_id}
+
+
+@tools.put("/guardian-directory/{guardian_id}")
+def update_guardian(school_id: str, guardian_id: str, guardian: GuardianIn):
+    with connection(school_id) as conn:
+        _begin_write(conn)
+        row = conn.execute("SELECT rowid FROM guardians WHERE id=?", (guardian_id,)).fetchone()
+        if not row:
+            raise HTTPException(404, "Responsável não encontrado")
+        try:
+            clean = validate(conn, "guardians", {"id": guardian_id, "name": guardian.name, "phone": guardian.phone}, current_rowid=row[0])
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        conn.execute("UPDATE guardians SET name=:name, phone=:phone WHERE id=:id", clean)
+        _assign_students(conn, guardian_id, guardian.student_ids)
+        return {"id": guardian_id}
+
+
+@tools.delete("/guardian-directory/{guardian_id}")
+def delete_guardian(school_id: str, guardian_id: str):
+    with connection(school_id) as conn:
+        _begin_write(conn)
+        if not conn.execute("SELECT 1 FROM guardians WHERE id=?", (guardian_id,)).fetchone():
+            raise HTTPException(404, "Responsável não encontrado")
+        used = references_to(conn, "guardians", guardian_id)
+        if used:
+            raise HTTPException(409, "Este responsável ainda tem filhos vinculados. Vincule-os a outro responsável antes de excluir.")
+        conn.execute("DELETE FROM guardians WHERE id=?", (guardian_id,))
+        return {"deleted": guardian_id}
 
 
 # --- Notices. One notice sent to several classes is one row per class, because the agent scopes by class_id.

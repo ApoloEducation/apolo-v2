@@ -45,6 +45,34 @@ def number_for(school_id: str, guardian_id: str) -> str | None:
     return None
 
 
+async def _school_data(path: str) -> dict | None:
+    base = os.getenv("SCHOOL_DATA_URL")
+    if not base:
+        return None
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            response = await client.get(f"{base}{path}")
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        log.warning("school-data lookup failed (%s); falling back to WHATSAPP_ALLOWED_NUMBERS", exc)
+        return None
+    return response.json() if response.status_code == 200 else None
+
+
+async def resolve_sender(sender: str) -> tuple[str, str] | None:
+    """Who is writing? The school's guardian registry (phone number on the guardian) first, then the
+    WHATSAPP_ALLOWED_NUMBERS fallback used for development."""
+    found = await _school_data(f"/lookup/phone/{sender}")
+    if found:
+        return found["school_id"], found["guardian_id"]
+    return allowed_numbers().get(sender)
+
+
+async def number_of(school_id: str, guardian_id: str) -> str | None:
+    """Where to send a human reply: the guardian's registered phone, else the .env fallback."""
+    found = await _school_data(f"/schools/{school_id}/guardians/{guardian_id}/phone")
+    return (found or {}).get("phone") or number_for(school_id, guardian_id)
+
+
 def valid_signature(body: bytes, header: str | None) -> bool:
     secret = os.getenv("WHATSAPP_APP_SECRET")
     if not secret:

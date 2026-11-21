@@ -31,7 +31,8 @@
   </section>
   <div class="error" id="error" role="alert"></div>
   <section class="actions" aria-label="Principais ações">
-    <a class="action lead" id="go-notices" data-path="/admin/avisos"><h2>Avisos</h2><p id="notices-status">Comunique turmas inteiras de uma só vez.</p><strong>Publicar aviso →</strong></a>
+    <a class="action lead" id="go-guardians" data-path="/admin/responsaveis"><h2>Responsáveis</h2><p id="guardians-status">Cadastre o WhatsApp dos pais: é assim que o Apolo reconhece quem escreve.</p><strong>Cadastrar responsável →</strong></a>
+    <a class="action" id="go-notices" data-path="/admin/avisos"><h2>Avisos</h2><p id="notices-status">Comunique turmas inteiras de uma só vez.</p><strong>Publicar aviso →</strong></a>
     <a class="action" id="go-attendance" data-path="/admin/frequencia"><h2>Frequência</h2><p id="attendance-status">Registre a chamada do dia.</p><strong>Fazer chamada →</strong></a>
     <a class="action" id="go-grades" data-path="/admin/notas"><h2>Notas</h2><p>Lance as notas da turma por matéria e bimestre.</p><strong>Lançar notas →</strong></a>
   </section>
@@ -50,6 +51,7 @@
     document.getElementById('school-name').textContent = data.school;
     document.title = `${data.school} · Painel`;
     document.getElementById('summary').textContent = `${data.students} alunos · ${data.classes} turmas · ${data.teachers} professores`;
+    document.getElementById('guardians-status').textContent = `${data.guardians_with_phone} de ${data.guardians} responsáveis com WhatsApp cadastrado. É assim que o Apolo reconhece quem escreve.`;
     document.getElementById('notices-status').textContent = `${data.notices} ${data.notices === 1 ? 'aviso publicado' : 'avisos publicados'}. Comunique turmas inteiras de uma só vez.`;
     document.getElementById('attendance-status').textContent = `Chamada de hoje: ${data.attendance_done} de ${data.classes} ${data.classes === 1 ? 'turma' : 'turmas'}.`;
   } catch (error) { document.getElementById('error').textContent = error.message; }

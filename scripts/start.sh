@@ -55,6 +55,25 @@ for project in $(compose_projects); do
   fi
 done
 
+# Mini-WhatsApp port: 5173, or the next free one when another program (e.g. a Vite dev server) holds it.
+# Our own messenger container already on a port does not count as "taken".
+own_port="$(docker compose port messenger 80 2>/dev/null | sed 's/.*://' || true)"
+MESSENGER_PORT=""
+for port in $(seq 5173 5199); do
+  if [ "$port" = "$own_port" ] || ! port_in_use "$port"; then MESSENGER_PORT="$port"; break; fi
+done
+[ -n "$MESSENGER_PORT" ] || fail "As portas 5173 a 5199 estão todas ocupadas. Libere a 5173 e rode 'make start' novamente."
+[ "$MESSENGER_PORT" = 5173 ] || muted "A porta 5173 está ocupada por outro programa; o Mini-WhatsApp vai usar a $MESSENGER_PORT."
+export MESSENGER_PORT
+# Kept in .env so manual `docker compose` commands publish the same port.
+set_env_value MESSENGER_PORT "$MESSENGER_PORT"
+# The browser calls agent-api from the Mini-WhatsApp origin, so that origin must be in CORS_ORIGINS.
+cors="$(env_value CORS_ORIGINS)"
+if [ -n "$cors" ] && ! printf ',%s,' "$cors" | grep -q ",http://localhost:$MESSENGER_PORT,"; then
+  set_env_value CORS_ORIGINS "$cors,http://localhost:$MESSENGER_PORT,http://127.0.0.1:$MESSENGER_PORT"
+  muted "Adicionei a porta $MESSENGER_PORT ao CORS_ORIGINS do .env."
+fi
+
 info "Apolo School MVP: iniciando banco de dados e cache"
 muted "Aguardando PostgreSQL ficar saudável..."
 docker compose up -d --wait --wait-timeout 120 chatwoot-postgres redis || fail "PostgreSQL não ficou saudável em 120 segundos. Execute: docker compose logs chatwoot-postgres"
@@ -78,17 +97,17 @@ docker compose run --rm -e BOOTSTRAP=true -e SCHOOL_NAME="$APOLO_SCHOOL_NAME" ch
 cat <<MSG
 
 $(printf '\033[32m')Tudo pronto: $APOLO_SCHOOL_NAME$(printf '\033[0m')
-  Mini-WhatsApp: http://localhost:5173
+  Mini-WhatsApp: http://localhost:$MESSENGER_PORT
   Chatwoot:      http://localhost:3000
   Admin:         admin@escola.local / ApoloLocal2026!
   Atendente:     atendente@escola.local / ApoloLocal2026!
-$([ -n "$(env_value ADMIN_TOKEN)" ] && echo "  Painel escola:   http://localhost:8001/admin")
+  Painel escola: http://localhost:8001/admin
 
 Para parar tudo: make stop
 Para trocar de escola: make start
 MSG
 
 if [ "${NO_BROWSER:-0}" != 1 ] && command -v open >/dev/null; then
-  open http://localhost:5173
+  open "http://localhost:$MESSENGER_PORT"
   open http://localhost:3000
 fi

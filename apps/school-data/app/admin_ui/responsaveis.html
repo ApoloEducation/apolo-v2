@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Responsáveis</title>
+<link rel="stylesheet" href="/admin/assets/common.css">
+<style>
+  .layout { display: grid; gap: 20px; grid-template-columns: minmax(280px, 360px) 1fr; align-items: start; }
+  @media (max-width: 860px) { .layout { grid-template-columns: 1fr; } }
+  .card h2 { font-size: 17px; margin-bottom: 4px; }
+  .card .hint { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+  form label { margin-bottom: 12px; }
+  select[multiple] { min-height: 150px; }
+  .formbar { display: flex; gap: 8px; margin-top: 4px; }
+  .editing { margin: 0 0 12px; padding: 8px 11px; border-radius: 8px; background: var(--warn-soft); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 10px 14px; text-align: left; border-top: 1px solid var(--line); vertical-align: top; }
+  thead th { border-top: 0; background: #eef3ef; font-size: 13px; color: var(--muted); }
+  .phone { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .kids { margin: 0; padding: 0; list-style: none; }
+  .kids small { color: var(--muted); }
+  td.ops { white-space: nowrap; text-align: right; }
+  .wrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<main>
+  <div class="page-title">
+    <h1>Responsáveis e WhatsApp</h1>
+    <p>O número cadastrado é como o Apolo reconhece quem está escrevendo, e a que filhos ele responde. Números não cadastrados são ignorados.</p>
+  </div>
+  <div class="error" id="error" role="alert"></div>
+  <div class="layout">
+    <section class="card">
+      <h2 id="form-title">Cadastrar responsável</h2>
+      <p class="hint">Informe o WhatsApp com DDD e escolha os filhos.</p>
+      <div class="editing" id="editing" hidden></div>
+      <form id="form" novalidate>
+        <label for="name">Nome<input id="name" required maxlength="200" autocomplete="off"></label>
+        <label for="phone">WhatsApp<input id="phone" type="tel" placeholder="(37) 99924-2395 ou +55 37 99924-2395" autocomplete="off"></label>
+        <label for="students">Filhos <span class="hint" style="font-weight:400">(Cmd/Ctrl para escolher vários)</span>
+          <select id="students" multiple></select></label>
+        <div class="error" id="form-error" role="alert"></div>
+        <div class="formbar"><button class="primary" type="submit" id="save">Cadastrar</button><button type="button" id="cancel" hidden>Cancelar</button></div>
+      </form>
+    </section>
+    <section>
+      <div class="wrap"><table>
+        <thead><tr><th>Responsável</th><th>WhatsApp</th><th>Filhos</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </section>
+  </div>
+</main>
+<script src="/admin/assets/common.js"></script>
+<script>
+(async () => {
+  await Apolo.start();
+  const { schoolApi, el, toast } = Apolo;
+  const $ = id => document.getElementById(id);
+  let directory = { guardians: [], students: [] };
+  let editing = null;
+
+  // 5537999242395 -> +55 (37) 99924-2395
+  function formatPhone(number) {
+    const match = /^55(\d{2})(\d{4,5})(\d{4})$/.exec(number || '');
+    return match ? `+55 (${match[1]}) ${match[2]}-${match[3]}` : number ? `+${number}` : '';
+  }
+
+  function fillStudents(selected = []) {
+    const owner = id => directory.guardians.find(g => g.id === id)?.name;
+    $('students').replaceChildren(...directory.students.map(s => {
+      const hint = s.guardian_id && s.guardian_id !== editing?.id ? ` — hoje: ${owner(s.guardian_id)}` : '';
+      const option = new Option(`${s.name} (${s.class_name})${hint}`, s.id, false, selected.includes(s.id));
+      return option;
+    }));
+  }
+
+  function renderRows() {
+    const body = $('rows');
+    if (!directory.guardians.length) { body.replaceChildren(el('tr', {}, el('td', { colSpan: 4, class: 'empty' }, 'Nenhum responsável cadastrado.'))); return; }
+    body.replaceChildren(...directory.guardians.map(g => {
+      const phone = g.phone ? el('span', { class: 'phone' }, formatPhone(g.phone)) : el('span', { class: 'badge warn' }, 'Sem WhatsApp');
+      const kids = el('ul', { class: 'kids' }, ...g.students.map(s => el('li', {}, s.name, ' ', el('small', {}, s.class_name))));
+      if (!g.students.length) kids.append(el('li', {}, el('small', {}, 'Nenhum filho vinculado')));
+      const edit = el('button', { class: 'small', onclick: () => startEdit(g) }, 'Editar');
+      const remove = el('button', { class: 'small danger', onclick: () => removeGuardian(g) }, 'Excluir');
+      return el('tr', {}, el('td', {}, el('strong', {}, g.name)), el('td', {}, phone), el('td', {}, kids), el('td', { class: 'ops' }, edit, ' ', remove));
+    }));
+  }
+
+  function reset() {
+    editing = null;
+    $('form').reset();
+    $('form-title').textContent = 'Cadastrar responsável';
+    $('save').textContent = 'Cadastrar';
+    $('cancel').hidden = true;
+    $('editing').hidden = true;
+    $('form-error').textContent = '';
+    fillStudents();
+  }
+
+  function startEdit(guardian) {
+    editing = guardian;
+    $('form-title').textContent = 'Editar responsável';
+    $('save').textContent = 'Salvar alterações';
+    $('cancel').hidden = false;
+    $('editing').hidden = false;
+    $('editing').textContent = `Editando ${guardian.name}. Filhos marcados passam a ser dele(a).`;
+    $('name').value = guardian.name;
+    $('phone').value = guardian.phone ? formatPhone(guardian.phone) : '';
+    fillStudents(guardian.students.map(s => s.id));
+    $('name').focus();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  async function removeGuardian(guardian) {
+    if (!confirm(`Excluir ${guardian.name}? Esta ação não pode ser desfeita.`)) return;
+    $('error').textContent = '';
+    try { await schoolApi(`/guardian-directory/${encodeURIComponent(guardian.id)}`, 'DELETE'); await load(); toast('Responsável excluído'); }
+    catch (error) { $('error').textContent = error.message; }
+  }
+
+  async function load() {
+    directory = await schoolApi('/guardian-directory');
+    renderRows();
+    fillStudents(editing ? editing.students.map(s => s.id) : []);
+  }
+
+  $('cancel').onclick = reset;
+  $('form').onsubmit = async event => {
+    event.preventDefault();
+    $('form-error').textContent = '';
+    const body = { name: $('name').value, phone: $('phone').value, student_ids: [...$('students').selectedOptions].map(o => o.value) };
+    if (!body.name.trim()) { $('form-error').textContent = "'name' é obrigatório"; return; }
+    $('save').disabled = true;
+    try {
+      const wasEditing = Boolean(editing);
+      await (editing ? schoolApi(`/guardian-directory/${encodeURIComponent(editing.id)}`, 'PUT', body) : schoolApi('/guardian-directory', 'POST', body));
+      reset();
+      await load();
+      toast(wasEditing ? 'Alterações salvas' : 'Responsável cadastrado');
+    } catch (error) { $('form-error').textContent = error.message; }
+    finally { $('save').disabled = false; }
+  };
+
+  try { await load(); reset(); } catch (error) { $('error').textContent = error.message; }
+})();
+</script>
+</body>
+</html>

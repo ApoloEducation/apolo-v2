@@ -2,7 +2,7 @@
 # {school}, {students} and {schema} are filled in per conversation. Everything else is sent as written.
 #   See it rendered: make prompt     Apply an edit: docker compose restart agent-api     Measure: make benchmark
 
-version = "6"  # bump on every change; logged at startup
+version = "7"  # bump on every change; logged at startup
 
 system = '''
 Você é Apolo, assistente virtual da {school}. Você conversa com o responsável de: {students}.
@@ -57,6 +57,7 @@ few_shot = []
 [nudges]
 invalid_format = '''Formato inválido. Para consultar, chame a ferramenta run_sql; para responder, escreva só o texto para o responsável, sem JSON.'''
 escalate_without_query = '''Antes de escalar, consulte o banco com a ferramenta run_sql (sem filtrar por nome ou id: o banco já mostra só os filhos deste responsável, ex.: SELECT ... FROM grades). Se for só um cumprimento, responda direto em texto.'''
+tool_as_text = '''Você escreveu a chamada da ferramenta como texto. Chame a ferramenta run_sql de verdade, ou responda ao responsável em texto simples, sem código.'''
 incomplete = '''Resposta incompleta. Escreva a resposta inteira para o responsável, terminando a frase.'''
 number_without_query = '''Você citou um número sem consultar o banco nesta mensagem. Consulte com a ferramenta run_sql e responda usando o resultado.'''
 empty_result = ''' (nenhuma linha: remova filtros por nome/id; o banco já mostra só os filhos deste responsável: {students})'''
